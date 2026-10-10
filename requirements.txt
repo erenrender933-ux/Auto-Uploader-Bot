@@ -1,0 +1,8 @@
+pyrofork
+tgcrypto
+motor
+python-dotenv
+guessit
+httpx
+Pillow
+aiofiles

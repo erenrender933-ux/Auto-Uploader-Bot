@@ -15,7 +15,7 @@ from helpers.link import make_link
 from helpers.progress import Progress
 from helpers.thumb import prepare_thumb
 from plugins.collector import QUEUE
-from plugins.post import build_caption, finalize_post
+from plugins.post import PostSink, build_caption
 
 OWNER = filters.user(Config.OWNER_ID)
 
@@ -141,7 +141,9 @@ async def open_posts(client: Client, cfg: dict, info: dict, poster):
                 )
             else:
                 msg = await client.send_message(chat_id, text, reply_markup=join)
-            posts.append(msg)
+            posts.append(
+                PostSink(chat_id, msg.id, bool(msg.photo), cfg["join_link"])
+            )
         except Exception:
             pass
     return posts
@@ -152,10 +154,11 @@ async def open_posts(client: Client, cfg: dict, info: dict, poster):
 async def process_file(client, chat_id, item, cfg, posts, saved_thumb):
     info = {k: item[k] for k in ("title", "season", "episode", "language", "quality")}
     target = cfg["target_channel"]
-    join = join_markup(cfg["join_link"])
-
-    status = await client.send_message(chat_id, "Starting...")
-    progress = Progress(info, [(status, None)] + [(m, join) for m in posts])
+    progress = Progress(info, posts)
+    label = (
+        f"{item['title']} S{item['season']:02d}E{item['episode']:02d} "
+        f"[{item['quality']}]"
+    )
 
     src_path = out_path = auto_thumb = None
     try:
@@ -211,16 +214,18 @@ async def process_file(client, chat_id, item, cfg, posts, saved_thumb):
         )
 
         link = make_link(cfg["filestore_bot"], target, sent.id)
-        await status.edit_text(
-            f"<b>Uploaded:</b> {item['title']} S{item['season']:02d}"
-            f"E{item['episode']:02d} [{item['quality']}]"
-        )
+
+        # add this quality's button to the main channel post right now
+        for post in posts:
+            post.add_link(item["quality"], link)
+        await progress.status(f"{item['quality']} Uploaded")
+
+        await client.send_message(chat_id, f"<b>Upload completed:</b> {label}")
         return link
 
     except Exception as e:
-        await status.edit_text(
-            f"<b>Failed:</b> {item['title']} E{item['episode']:02d} "
-            f"[{item['quality']}]\n<code>{e}</code>"
+        await client.send_message(
+            chat_id, f"<b>Failed:</b> {label}\n<code>{e}</code>"
         )
         return None
 
@@ -260,30 +265,27 @@ async def run_queue(client, chat_id, user_id, items, cfg):
                 "episode": episode, "language": language,
             }
             posts = await open_posts(client, cfg, info, poster)
-            links = {}
+            got_any = False
 
             for item in files:
                 if STATE["cancel"]:
                     break
                 link = await process_file(client, chat_id, item, cfg, posts, thumb)
                 if link:
-                    links[item["quality"]] = link
+                    got_any = True
                     uploaded += 1
                 else:
                     failed += 1
 
-            if links:
-                errors = await finalize_post(
-                    posts, build_caption(title, season, episode, language), links
+            if got_any:
+                caption = build_caption(title, season, episode, language)
+                await asyncio.gather(
+                    *(p.finalize(caption) for p in posts), return_exceptions=True
                 )
-                if errors:
-                    await client.send_message(
-                        chat_id, "Post failed:\n<code>" + "\n".join(errors) + "</code>"
-                    )
             else:
                 for post in posts:
                     try:
-                        await post.delete()
+                        await client.delete_messages(post.chat_id, post.message_id)
                     except Exception:
                         pass
 

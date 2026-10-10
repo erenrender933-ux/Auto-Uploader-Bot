@@ -1,3 +1,4 @@
+import asyncio
 import copy
 import html
 import json
@@ -88,31 +89,68 @@ async def post_to_main_channels(
     return errors
     
 
-async def finalize_post(messages: list, caption: str, links: dict) -> list[str]:
-    """Turn the progress posts into the final post with coloured buttons."""
-    markup = raw_quality_markup(links)
-    errors = []
+class PostSink:
+    """One main-channel post that shows progress and collects quality buttons."""
 
-    for msg in messages:
-        has_photo = bool(msg.photo)
-        method = "editMessageCaption" if has_photo else "editMessageText"
-        text_key = "caption" if has_photo else "text"
-        error = ""
+    def __init__(self, chat_id: int, message_id: int, is_photo: bool, join_link: str):
+        self.chat_id = chat_id
+        self.message_id = message_id
+        self.is_photo = is_photo
+        self.join_link = join_link
+        self.links: dict = {}
+        self.final = False
+        self.styled = True
+        self._last = None
 
-        for attempt in (markup, strip_style(markup)):
-            data = {
-                "chat_id": msg.chat.id,
-                "message_id": msg.id,
-                text_key: caption,
-                "parse_mode": "HTML",
-                "reply_markup": json.dumps(attempt),
-            }
-            result = await _call(method, data)
+    def add_link(self, quality: str, link: str):
+        self.links[quality] = link
+
+    def _markup(self) -> dict:
+        rows = raw_quality_markup(self.links)["inline_keyboard"] if self.links else []
+        if not self.final:
+            rows = rows + [[{"text": "Join Now", "url": self.join_link}]]
+        markup = {"inline_keyboard": rows}
+        return markup if self.styled else strip_style(markup)
+
+    async def edit(self, text: str):
+        method = "editMessageCaption" if self.is_photo else "editMessageText"
+        text_key = "caption" if self.is_photo else "text"
+
+        for _ in range(3):
+            markup = self._markup()
+            key = (text, json.dumps(markup, sort_keys=True))
+            if key == self._last:
+                return
+
+            result = await _call(
+                method,
+                {
+                    "chat_id": self.chat_id,
+                    "message_id": self.message_id,
+                    text_key: text,
+                    "parse_mode": "HTML",
+                    "reply_markup": json.dumps(markup),
+                },
+            )
             if result.get("ok"):
-                error = ""
-                break
-            error = result.get("description", "unknown error")
+                self._last = key
+                return
 
-        if error:
-            errors.append(f"{msg.chat.id}: {error}")
-    return errors
+            desc = result.get("description", "")
+            if "not modified" in desc:
+                self._last = key
+                return
+
+            retry = result.get("parameters", {}).get("retry_after")
+            if retry:
+                await asyncio.sleep(retry)
+                continue
+
+            if self.styled:
+                self.styled = False  # fall back to plain buttons
+                continue
+            return
+
+    async def finalize(self, caption: str):
+        self.final = True
+        await self.edit(caption)

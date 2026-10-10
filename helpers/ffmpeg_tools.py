@@ -60,6 +60,8 @@ async def process_video(
     watermark_text: str,
     watermark_enabled: bool,
     metadata_enabled: bool,
+    duration: int = 0,
+    on_progress=None,
 ) -> tuple[bool, str]:
     cmd = ["ffmpeg", "-y", "-i", input_path, "-map", "0"]
 
@@ -82,9 +84,32 @@ async def process_video(
             "-metadata:s:v:0", f"title={author}",
         ]
 
-    cmd += ["-max_muxing_queue_size", "1024", output_path]
+    cmd += [
+        "-max_muxing_queue_size", "1024",
+        "-progress", "pipe:1", "-nostats",
+        output_path,
+    ]
 
-    code, _, err = await _run(cmd)
-    if code != 0:
+    proc = await asyncio.create_subprocess_exec(
+        *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
+    )
+    err_task = asyncio.create_task(proc.stderr.read())
+
+    while True:
+        line = await proc.stdout.readline()
+        if not line:
+            break
+        key, _, value = line.decode(errors="ignore").strip().partition("=")
+        if key in ("out_time_us", "out_time_ms") and value.isdigit():
+            if on_progress and duration:
+                seconds = min(int(value) / 1_000_000, duration)
+                await on_progress(seconds, duration)
+
+    await proc.wait()
+    err = (await err_task).decode(errors="ignore")
+
+    if proc.returncode != 0:
         return False, err[-500:]
+    if on_progress and duration:
+        await on_progress(duration, duration)
     return True, ""

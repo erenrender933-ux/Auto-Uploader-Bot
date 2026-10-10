@@ -1,7 +1,7 @@
+import asyncio
 import time
 
 from pyrogram.errors import FloodWait, MessageNotModified
-import asyncio
 
 
 def humanbytes(size: float) -> str:
@@ -33,7 +33,7 @@ def make_bar(percent: float, length: int = 14) -> str:
 class Progress:
     """
     info    : dict with title, season, episode, language, quality
-    targets : list of (message, reply_markup) that get edited live
+    targets : list of (message, reply_markup) edited live
     """
 
     def __init__(self, info: dict, targets: list, interval: int = 5):
@@ -52,7 +52,7 @@ class Progress:
     def _header(self) -> str:
         i = self.info
         return (
-            f"<b>{i['title']}</b>\n\n"
+            f"<b><blockquote>◈ {i['title']}</b></blockquote>\n\n"
             f"<b>Season:</b> {int(i['season']):02d}\n"
             f"<b>Episode:</b> {int(i['episode']):02d}\n"
             f"<b>Language:</b> {i['language']}\n"
@@ -62,7 +62,10 @@ class Progress:
     async def _edit_all(self, text: str):
         for message, markup in self.targets:
             try:
-                await message.edit_text(text, reply_markup=markup)
+                if message.photo:
+                    await message.edit_caption(text, reply_markup=markup)
+                else:
+                    await message.edit_text(text, reply_markup=markup)
             except MessageNotModified:
                 pass
             except FloodWait as e:
@@ -71,12 +74,11 @@ class Progress:
                 pass
 
     async def status(self, text: str):
-        """Message without a bar, e.g. 'Setup File Processing...!'"""
         self.set_stage(text)
         await self._edit_all(self._header() + f"<b>{text}</b>")
 
     async def update(self, current: int, total: int):
-        """Pass this as the progress= callback in Pyrogram."""
+        """Download / upload callback (bytes)."""
         now = time.time()
         if now - self.last_edit < self.interval and current != total:
             return
@@ -87,12 +89,30 @@ class Progress:
         speed = current / elapsed
         eta = (total - current) / speed if speed else 0
 
-        text = (
+        await self._edit_all(
             self._header()
-            + f"<b>{self.stage}...</b>\n"
-            + f"{make_bar(percent)} {percent:.1f}%\n\n"
-            + f"<b>Done:</b> {humanbytes(current)} / {humanbytes(total)}\n"
-            + f"<b>Speed:</b> {humanbytes(speed)}/s\n"
-            + f"<b>ETA:</b> {human_time(eta)}"
+            + f"<b><blockquote>◈ {self.stage}...</blockquote></b>\n"
+            + f"<blockquote><b>{make_bar(percent)} {percent:.1f}%</blockquote></b>\n\n"
+            + f"<b>✅ Done:</b> {humanbytes(current)} / {humanbytes(total)}\n"
+            + f"<b>⚡ Speed:</b> {humanbytes(speed)}/s\n"
+            + f"<b>⏱️ ETA:</b> {human_time(eta)}"
         )
-        await self._edit_all(text)
+
+    async def update_encode(self, done_sec: float, total_sec: float):
+        """ffmpeg callback (seconds of video processed)."""
+        now = time.time()
+        if now - self.last_edit < self.interval and done_sec < total_sec:
+            return
+        self.last_edit = now
+
+        percent = (done_sec * 100 / total_sec) if total_sec else 0
+        elapsed = max(now - self.start, 1)
+        rate = done_sec / elapsed
+        eta = (total_sec - done_sec) / rate if rate else 0
+
+        await self._edit_all(
+            self._header()
+            + "<b><blockquote>◈ ⚙️ Encoding Files...</blockquote></b>\n"
+            + f"<blockquote>» {make_bar(percent)} {percent:.1f}%</blockquote>\n\n"
+            + f"<b> ◈ ETA:</b> {human_time(eta)}"
+        )

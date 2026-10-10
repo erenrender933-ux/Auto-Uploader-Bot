@@ -21,13 +21,13 @@ def language_label(language: str) -> str:
 
 def build_caption(title: str, season: int, episode: int, language: str) -> str:
     return (
-        f"<blockquote>{html.escape(title)}</blockquote>\n"
-        "━━━━━━━━━━━━━━━━━━\n"
-        f"➥ Season: {season:02d}\n"
+        f"<blockquote><b>{html.escape(title)}</blockquote></b>\n"
+        "<b>━━━━━━━━━━━━━━━━━━</b>\n"
+        f"<b>➤ Season: {season:02d}\n"
         f"➤ Episode: {episode:02d}\n"
-        f"➥ Quality: Multi Quality [{language_label(language)}]\n"
-        "━━━━━━━━━━━━━━━━━━\n\n"
-        f"<blockquote>NEW EPISODE {episode:02d} ADDED 👇</blockquote>"
+        f"➤ Quality: Multi Quality [{language_label(language)}]</b>\n"
+        "<b>━━━━━━━━━━━━━━━━━━</b>\n\n"
+        f"<b><blockquote>ɴᴇᴡ ᴇᴘɪsᴏᴅᴇ {episode:02d} ᴀᴅᴅᴇᴅ 👇</b></blockquote>"
     )
 
 
@@ -85,4 +85,34 @@ async def post_to_main_channels(
         ok, error = await send_post(chat_id, caption, markup, poster)
         if not ok:
             errors.append(f"{chat_id}: {error}")
+    return errors
+    
+
+async def finalize_post(messages: list, caption: str, links: dict) -> list[str]:
+    """Turn the progress posts into the final post with coloured buttons."""
+    markup = raw_quality_markup(links)
+    errors = []
+
+    for msg in messages:
+        has_photo = bool(msg.photo)
+        method = "editMessageCaption" if has_photo else "editMessageText"
+        text_key = "caption" if has_photo else "text"
+        error = ""
+
+        for attempt in (markup, strip_style(markup)):
+            data = {
+                "chat_id": msg.chat.id,
+                "message_id": msg.id,
+                text_key: caption,
+                "parse_mode": "HTML",
+                "reply_markup": json.dumps(attempt),
+            }
+            result = await _call(method, data)
+            if result.get("ok"):
+                error = ""
+                break
+            error = result.get("description", "unknown error")
+
+        if error:
+            errors.append(f"{msg.chat.id}: {error}")
     return errors

@@ -13,6 +13,8 @@ DEFAULTS = {
     "metadata_enabled": True,
     "metadata_title": "Animes Tamil Hub",
     "metadata_author": "@Anime_Hub_Tamil",
+    "db_channel": Config.DB_CHANNEL,
+    "filestore_bot": Config.FILESTORE_BOT,
 }
 
 

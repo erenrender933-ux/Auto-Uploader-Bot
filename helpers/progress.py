@@ -1,8 +1,6 @@
 import asyncio
 import time
 
-from pyrogram.errors import FloodWait, MessageNotModified
-
 
 def humanbytes(size: float) -> str:
     units = ["B", "KB", "MB", "GB", "TB"]
@@ -15,7 +13,7 @@ def humanbytes(size: float) -> str:
 
 
 def human_time(seconds: float) -> str:
-    seconds = int(seconds)
+    seconds = int(max(seconds, 0))
     h, rem = divmod(seconds, 3600)
     m, s = divmod(rem, 60)
     if h:
@@ -26,23 +24,25 @@ def human_time(seconds: float) -> str:
 
 
 def make_bar(percent: float, length: int = 14) -> str:
+    percent = max(0.0, min(percent, 100.0))
     filled = int(length * percent / 100)
     return "▰" * filled + "▱" * (length - filled)
 
 
 class Progress:
     """
-    info    : dict with title, season, episode, language, quality
-    targets : list of (message, reply_markup) edited live
+    info  : dict with title, season, episode, language, quality
+    sinks : objects with an async edit(text) method (PostSink)
     """
 
-    def __init__(self, info: dict, targets: list, interval: int = 5):
+    def __init__(self, info: dict, sinks: list, interval: int = 7):
         self.info = info
-        self.targets = targets
+        self.sinks = sinks
         self.interval = interval
         self.stage = "Downloading"
         self.start = time.time()
         self.last_edit = 0.0
+        self._busy = False
 
     def set_stage(self, stage: str):
         self.stage = stage
@@ -52,30 +52,29 @@ class Progress:
     def _header(self) -> str:
         i = self.info
         return (
-            f"<b><blockquote>◈ {i['title']}</b></blockquote>\n\n"
+            f"<b>{i['title']}</b>\n\n"
             f"<b>Season:</b> {int(i['season']):02d}\n"
             f"<b>Episode:</b> {int(i['episode']):02d}\n"
             f"<b>Language:</b> {i['language']}\n"
             f"<b>Quality:</b> {i['quality']}\n\n"
         )
 
-    async def _edit_all(self, text: str):
-        for message, markup in self.targets:
-            try:
-                if message.photo:
-                    await message.edit_caption(text, reply_markup=markup)
-                else:
-                    await message.edit_text(text, reply_markup=markup)
-            except MessageNotModified:
-                pass
-            except FloodWait as e:
-                await asyncio.sleep(e.value)
-            except Exception:
-                pass
+    async def _push(self, text: str, force: bool = False):
+        # skip if the previous edit is still running (keeps downloads fast)
+        if self._busy and not force:
+            return
+        self._busy = True
+        try:
+            await asyncio.gather(
+                *(sink.edit(text) for sink in self.sinks),
+                return_exceptions=True,
+            )
+        finally:
+            self._busy = False
 
     async def status(self, text: str):
         self.set_stage(text)
-        await self._edit_all(self._header() + f"<b>{text}</b>")
+        await self._push(self._header() + f"<b>{text}</b>", force=True)
 
     async def update(self, current: int, total: int):
         """Download / upload callback (bytes)."""
@@ -89,10 +88,10 @@ class Progress:
         speed = current / elapsed
         eta = (total - current) / speed if speed else 0
 
-        await self._edit_all(
+        await self._push(
             self._header()
-            + f"<b><blockquote>◈ {self.stage}...</blockquote></b>\n"
-            + f"<blockquote><b>{make_bar(percent)} {percent:.1f}%</blockquote></b>\n\n"
+            + f"<blockquote><b>{self.stage}...</blockquote></b>\n"
+            + f"<b><blockquote>{make_bar(percent)} {percent:.1f}%</b></blockquote>\n\n"
             + f"<b>✅ Done:</b> {humanbytes(current)} / {humanbytes(total)}\n"
             + f"<b>⚡ Speed:</b> {humanbytes(speed)}/s\n"
             + f"<b>⏱️ ETA:</b> {human_time(eta)}"
@@ -110,9 +109,9 @@ class Progress:
         rate = done_sec / elapsed
         eta = (total_sec - done_sec) / rate if rate else 0
 
-        await self._edit_all(
+        await self._push(
             self._header()
-            + "<b><blockquote>◈ ⚙️ Encoding Files...</blockquote></b>\n"
-            + f"<blockquote>» {make_bar(percent)} {percent:.1f}%</blockquote>\n\n"
-            + f"<b> ◈ ETA:</b> {human_time(eta)}"
+            + "<b><blockquote>⚙️ Encoding Files...</blockquote></b>\n"
+            + f"<blockquote><b>{make_bar(percent)} {percent:.1f}%</b></blockquote>\n\n"
+            + f"⏱️<b>ETA:</b> {human_time(eta)}"
         )

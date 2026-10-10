@@ -6,6 +6,7 @@ DEFAULTS = {
     "target_channel": Config.TARGET_CHANNEL,
     "main_channels": Config.MAIN_CHANNELS,
     "join_link": Config.JOIN_LINK,
+    "thumb_file_id": None,
     "watermark_enabled": True,
     "watermark_text": Config.WATERMARK_TEXT,
     "rename_enabled": True,

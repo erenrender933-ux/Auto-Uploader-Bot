@@ -1,4 +1,5 @@
 import asyncio
+import html
 import os
 import re
 from collections import defaultdict
@@ -10,7 +11,7 @@ from config import Config
 from database.db import db
 from helpers.anilist import download_poster, fetch_anime
 from helpers.buttons import join_markup
-from helpers.ffmpeg_tools import make_thumbnail, probe, process_video
+from helpers.ffmpeg_tools import make_thumbnail, pick_audio, probe, process_video
 from helpers.link import make_link
 from helpers.progress import Progress, ProgressSink
 from helpers.thumb import prepare_thumb
@@ -53,6 +54,27 @@ def remove(path):
             pass
 
 
+def _key(title: str) -> str:
+    return re.sub(r"[^a-z0-9]", "", title.lower())
+
+
+def unify_titles(items: list):
+    """Make slightly different titles of the same anime identical."""
+    seasons = defaultdict(list)
+    for item in items:
+        seasons[item["season"]].append(item)
+
+    for group in seasons.values():
+        canon = {}
+        for item in sorted(group, key=lambda i: len(_key(i["title"]))):
+            key = _key(item["title"])
+            match = next((k for k in canon if key.startswith(k)), None)
+            if match:
+                item["title"] = canon[match]
+            else:
+                canon[key] = item["title"]
+
+
 # ---------- asking for photos (poster / thumbnail) ----------
 
 @Client.on_message(filters.private & OWNER & (filters.photo | filters.command("skip")))
@@ -84,8 +106,9 @@ async def ask_photo(client: Client, chat_id: int, user_id: int, prompt: str):
 async def get_poster(client, chat_id, user_id, title, season):
     poster = await ask_photo(
         client, chat_id, user_id,
-        f"Send the <b>poster</b> for <b>{title}</b> (Season {season:02d}), "
-        "or /skip to use the AniList poster.\n(Auto skip in 2 minutes)",
+        f"Send the <b>poster</b> for <b>{html.escape(title)}</b> "
+        f"(Season {season:02d}), or /skip to use the AniList poster.\n"
+        "(Auto skip in 2 minutes)",
     )
     if poster:
         return poster
@@ -98,7 +121,7 @@ async def get_poster(client, chat_id, user_id, title, season):
 async def get_thumb(client, chat_id, user_id, title, cfg):
     path = await ask_photo(
         client, chat_id, user_id,
-        f"Send the <b>thumbnail</b> for <b>{title}</b>, "
+        f"Send the <b>thumbnail</b> for <b>{html.escape(title)}</b>, "
         "or /skip to use the saved thumbnail (/setthumb).\n"
         "(Auto skip in 2 minutes)",
     )
@@ -140,7 +163,7 @@ async def open_posts(client: Client, cfg: dict, info: dict, poster):
 
             prog = await client.send_message(
                 chat_id,
-                f"<b>{info['title']}</b>\n\n<b>Preparing...</b>",
+                f"<b>{html.escape(info['title'])}</b>\n\n<b>Preparing...</b>",
                 reply_markup=join,
             )
             sinks.append(ProgressSink(prog, join))
@@ -155,7 +178,7 @@ async def process_file(client, chat_id, item, cfg, posts, sinks, saved_thumb):
     info = {k: item[k] for k in ("title", "season", "episode", "language", "quality")}
     target = cfg["target_channel"]
     progress = Progress(info, sinks)
-    label = (
+    label = html.escape(
         f"{item['title']} S{item['season']:02d}E{item['episode']:02d} "
         f"[{item['quality']}]"
     )
@@ -172,6 +195,19 @@ async def process_file(client, chat_id, item, cfg, posts, sinks, saved_thumb):
         )
 
         meta = await probe(src_path)
+
+        # language filter: keep only the chosen audio language
+        audio_indexes = None
+        wanted = cfg.get("keep_language")
+        if wanted:
+            audio_indexes = pick_audio(meta["audio_streams"], wanted)
+            if not audio_indexes:
+                found = ", ".join(
+                    s["lang"] or "und" for s in meta["audio_streams"]
+                ) or "none"
+                raise RuntimeError(
+                    f"No {wanted} audio found. Audio tracks: {found}"
+                )
 
         if cfg["rename_enabled"]:
             new_name = build_name(cfg["rename_format"], item)
@@ -192,6 +228,7 @@ async def process_file(client, chat_id, item, cfg, posts, sinks, saved_thumb):
             metadata_enabled=cfg["metadata_enabled"],
             quality=item["quality"],
             duration=meta["duration"],
+            audio_indexes=audio_indexes,
             on_progress=progress.update_encode,
         )
         if not ok:
@@ -213,7 +250,7 @@ async def process_file(client, chat_id, item, cfg, posts, sinks, saved_thumb):
             target,
             out_path,
             thumb=thumb,
-            caption=f"<b>{os.path.basename(out_path)}</b>",
+            caption=f"<b>{html.escape(os.path.basename(out_path))}</b>",
             force_document=True,
             progress=progress.update,
         )
@@ -233,7 +270,7 @@ async def process_file(client, chat_id, item, cfg, posts, sinks, saved_thumb):
 
     except Exception as e:
         await client.send_message(
-            chat_id, f"<b>Failed:</b> {label}\n<code>{e}</code>"
+            chat_id, f"<b>Failed:</b> {label}\n<code>{html.escape(str(e))}</code>"
         )
         return None
 
@@ -292,16 +329,31 @@ async def run_queue(client, chat_id, user_id, items, cfg):
                 await sink.delete()
 
             if links:
-                if not STATE["cancel"]:
-                    watch_link = cfg.get("watch_link") or cfg["join_link"]
-                    error = await send_primary_post(
-                        client, cfg, title, season, episode, language,
-                        list(links.keys()), poster, watch_link,
+                if STATE["cancel"]:
+                    pass
+                elif not cfg.get("primary_channel"):
+                    await client.send_message(
+                        chat_id,
+                        "Primary channel is not set. Use /setprimary -100xxxx",
                     )
+                else:
+                    watch_link = cfg.get("watch_link") or cfg["join_link"]
+                    try:
+                        error = await send_primary_post(
+                            client, cfg, title, season, episode, language,
+                            list(links.keys()), poster, watch_link,
+                        )
+                    except Exception as e:
+                        error = str(e)
                     if error:
                         await client.send_message(
                             chat_id,
-                            f"Primary channel post failed:\n<code>{error}</code>",
+                            "Primary channel post failed:\n"
+                            f"<code>{html.escape(str(error))}</code>",
+                        )
+                    else:
+                        await client.send_message(
+                            chat_id, "Primary channel post sent."
                         )
             else:
                 for post in posts:
@@ -334,6 +386,13 @@ async def start_process(client: Client, message: Message):
         return await message.reply_text(
             "Target channel, main channels and file store bot must be set first."
         )
+
+    # one language for the whole batch, and one title per anime
+    keep = cfg.get("keep_language")
+    if keep:
+        for item in items:
+            item["language"] = keep
+    unify_titles(items)
 
     STATE.update(running=True, cancel=False)
     QUEUE[user_id] = []

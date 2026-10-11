@@ -194,10 +194,12 @@ async def process_file(client, chat_id, item, cfg, posts, sinks, saved_thumb):
             duration=meta["duration"],
             on_progress=progress.update_encode,
         )
-        if not ok:
-            out_meta = await probe(out_path)
-        if meta["audio"] and not out_meta["audio"]:
-            raise RuntimeError("Output file has no audio. Upload stopped.")
+        
+out_meta = await probe(out_path)
+
+if meta["audio"] and not out_meta["audio"]:
+    raise RuntimeError("Output file has no audio. Upload stopped.")
+    
 
         thumb = saved_thumb
         if not thumb:

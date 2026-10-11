@@ -43,7 +43,7 @@ def build_primary_caption(
     )
     quality_text = ",".join(q.upper() for q in ordered)
     return (
-        f"<b><blockquote>╰┈➤ {html.escape(title).upper()}</b></blockquote>\n"
+        f"<blockquote>╰┈➤ {html.escape(title.upper(), quote=False)}</blockquote>\n"
         "<b>━━━━━━━━━━━━━━━━━━\n"
         f"✧ sᴇᴀsᴏɴ  ✦ {season:02d}\n"
         f"✧ ᴀᴜᴅɪᴏ   ✦ {language.upper()}\n"
@@ -135,29 +135,33 @@ async def send_primary_post(
         return ""
 
     caption = build_primary_caption(title, season, episode, language, qualities)
-    button = {
-        "text": "• ᴄʟɪᴄᴋ ʜᴇʀᴇ ᴛᴏ ᴡᴀᴛᴄʜ •",
-        "url": watch_link,
-        "style": "primary",  # blue
-    }
-    plain = {k: v for k, v in button.items() if k != "style"}
+    label = "• ᴄʟɪᴄᴋ ʜᴇʀᴇ ᴛᴏ ᴡᴀᴛᴄʜ •"
+    plain = InlineKeyboardMarkup([[InlineKeyboardButton(label, url=watch_link)]])
 
-    error = ""
-    for btn in (button, plain):
-        data = {
-            "chat_id": chat_id,
-            "parse_mode": "HTML",
-            "reply_markup": json.dumps({"inline_keyboard": [[btn]]}),
-        }
+    try:
         if poster and os.path.exists(poster):
-            data["caption"] = caption
-            with open(poster, "rb") as photo:
-                result = await _call("sendPhoto", data, {"photo": photo})
+            msg = await client.send_photo(
+                chat_id, poster, caption=caption, reply_markup=plain
+            )
         else:
-            data["text"] = caption
-            result = await _call("sendMessage", data)
+            msg = await client.send_message(chat_id, caption, reply_markup=plain)
+    except Exception as e:
+        return str(e)
 
-        if result.get("ok"):
-            return ""
-        error = result.get("description", "unknown error")
-    return error
+    # Pyrogram cannot colour buttons, so change the markup to blue via Bot API.
+    # If this fails, the plain button stays and the post is still fine.
+    blue = {
+        "inline_keyboard": [[{"text": label, "url": watch_link, "style": "primary"}]]
+    }
+    try:
+        await _call(
+            "editMessageReplyMarkup",
+            {
+                "chat_id": chat_id,
+                "message_id": msg.id,
+                "reply_markup": json.dumps(blue),
+            },
+        )
+    except Exception:
+        pass
+    return ""

@@ -1,5 +1,7 @@
 import asyncio
+import html
 import time
+
 from pyrogram.errors import FloodWait, MessageNotModified
 
 
@@ -18,27 +20,31 @@ def human_time(seconds: float) -> str:
     h, rem = divmod(seconds, 3600)
     m, s = divmod(rem, 60)
     if h:
-        return f"{h}h {m}m {s}s"
+        return f"{h}h, {m}m, {s}s"
     if m:
-        return f"{m}m {s}s"
+        return f"{m}m, {s}s"
     return f"{s}s"
 
 
-def make_bar(percent: float, length: int = 14) -> str:
+def make_bar(percent: float, length: int = 12) -> str:
     percent = max(0.0, min(percent, 100.0))
     filled = int(length * percent / 100)
-    return "▰" * filled + "▱" * (length - filled)
+    return "■" * filled + "□" * (length - filled)
 
 
 class Progress:
     """
-    info  : dict with title, season, episode, language, quality
-    sinks : objects with an async edit(text) method (PostSink)
+    name  : output file name shown as "Anime Name"
+    sinks : objects with an async edit(text) method
+    stats : {"done": int, "total": int} shared by the whole task
     """
 
-    def __init__(self, info: dict, sinks: list, interval: int = 7):
-        self.info = info
+    def __init__(self, name: str, sinks: list, stats: dict | None = None,
+                 task_id: int = 0, interval: int = 7):
+        self.name = name
         self.sinks = sinks
+        self.stats = stats or {"done": 0, "total": 0}
+        self.task_id = task_id
         self.interval = interval
         self.stage = "Downloading"
         self.start = time.time()
@@ -50,18 +56,35 @@ class Progress:
         self.start = time.time()
         self.last_edit = 0.0
 
-    def _header(self) -> str:
-        i = self.info
-        return (
-            f"<b>{i['title']}</b>\n\n"
-            f"<b>Season:</b> {int(i['season']):02d}\n"
-            f"<b>Episode:</b> {int(i['episode']):02d}\n"
-            f"<b>Language:</b> {i['language']}\n"
-            f"<b>Quality:</b> {i['quality']}\n\n"
+    def _text(self, status: str, percent=None, size_line="", speed=0.0, left=0.0):
+        parts = [
+            f"<blockquote>▶ <b>Anime Name :</b> <i>{html.escape(self.name)}</i></blockquote>"
+        ]
+        if percent is None:
+            parts.append(
+                f"<blockquote>▶ <b>Status :</b> <i>{html.escape(status)}</i></blockquote>"
+            )
+        else:
+            took = time.time() - self.start
+            parts.append(
+                f"<blockquote>▶ <b>Status :</b> <i>{html.escape(status)}</i>\n"
+                f"   [{make_bar(percent)}] {percent:.2f}%</blockquote>"
+            )
+            parts.append(
+                f"<blockquote>   ▶ <b>Size :</b> {size_line}\n"
+                f"   ▶ <b>Speed :</b> {humanbytes(speed)}/s\n"
+                f"   ▶ <b>Time Took :</b> {human_time(took)}\n"
+                f"   ▶ <b>Time Left :</b> {human_time(left)}</blockquote>"
+            )
+        parts.append(
+            f"<blockquote>▶ <b>File(s) Encoded:</b> "
+            f"{self.stats['done']} / {self.stats['total']}\n"
+            f"▶ <b>Task ID :</b> {self.task_id}</blockquote>"
         )
+        return "\n".join(parts)
 
     async def _push(self, text: str, force: bool = False):
-        # skip if the previous edit is still running (keeps downloads fast)
+        # skip if the previous edit is still running (keeps transfers fast)
         if self._busy and not force:
             return
         self._busy = True
@@ -75,7 +98,7 @@ class Progress:
 
     async def status(self, text: str):
         self.set_stage(text)
-        await self._push(self._header() + f"<b>{text}</b>", force=True)
+        await self._push(self._text(text), force=True)
 
     async def update(self, current: int, total: int):
         """Download / upload callback (bytes)."""
@@ -87,19 +110,18 @@ class Progress:
         percent = (current * 100 / total) if total else 0
         elapsed = max(now - self.start, 1)
         speed = current / elapsed
-        eta = (total - current) / speed if speed else 0
+        left = (total - current) / speed if speed else 0
 
         await self._push(
-            self._header()
-            + f"<blockquote><b>{self.stage}...</blockquote></b>\n"
-            + f"<b><blockquote>{make_bar(percent)} {percent:.1f}%</b></blockquote>\n\n"
-            + f"<b>✅ Done:</b> {humanbytes(current)} / {humanbytes(total)}\n"
-            + f"<b>⚡ Speed:</b> {humanbytes(speed)}/s\n"
-            + f"<b>⏱️ ETA:</b> {human_time(eta)}"
+            self._text(
+                self.stage, percent,
+                f"{humanbytes(current)} out of ~ {humanbytes(total)}",
+                speed, left,
+            )
         )
 
-    async def update_encode(self, done_sec: float, total_sec: float):
-        """ffmpeg callback (seconds of video processed)."""
+    async def update_encode(self, done_sec: float, total_sec: float, out_size: int = 0):
+        """ffmpeg callback (seconds of video done, bytes written so far)."""
         now = time.time()
         if now - self.last_edit < self.interval and done_sec < total_sec:
             return
@@ -108,13 +130,16 @@ class Progress:
         percent = (done_sec * 100 / total_sec) if total_sec else 0
         elapsed = max(now - self.start, 1)
         rate = done_sec / elapsed
-        eta = (total_sec - done_sec) / rate if rate else 0
+        left = (total_sec - done_sec) / rate if rate else 0
+        estimate = out_size * total_sec / done_sec if done_sec else 0
+        speed = out_size / elapsed
 
         await self._push(
-            self._header()
-            + "<b><blockquote>⚙️ Encoding Files...</blockquote></b>\n"
-            + f"<blockquote><b>{make_bar(percent)} {percent:.1f}%</b></blockquote>\n\n"
-            + f"⏱️<b>ETA:</b> {human_time(eta)}"
+            self._text(
+                self.stage, percent,
+                f"{humanbytes(out_size)} out of ~ {humanbytes(estimate)}",
+                speed, left,
+            )
         )
 
 

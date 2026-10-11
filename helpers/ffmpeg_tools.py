@@ -27,7 +27,10 @@ async def probe(path: str) -> dict:
         "-show_format", "-show_streams", path,
     ]
     code, out, _ = await _run(cmd)
-    info = {"duration": 0, "width": 0, "height": 0, "audio": []}
+    info = {
+        "duration": 0, "width": 0, "height": 0,
+        "audio": [], "audio_streams": [],
+    }
     if code != 0:
         return info
     data = json.loads(out)
@@ -38,7 +41,14 @@ async def probe(path: str) -> dict:
             info["width"] = stream.get("width", 0)
             info["height"] = stream.get("height", 0)
         elif kind == "audio":
+            tags = {k.lower(): v for k, v in stream.get("tags", {}).items()}
             info["audio"].append(stream.get("codec_name", "unknown"))
+            info["audio_streams"].append(
+                {
+                    "lang": tags.get("language", "").lower(),
+                    "title": tags.get("title", "").lower(),
+                }
+            )
     return info
 
 

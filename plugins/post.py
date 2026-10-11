@@ -27,11 +27,11 @@ def build_caption(title: str, season: int, episode: int, language: str) -> str:
     return (
         f"<b><blockquote>{html.escape(title)}</b></blockquote>\n"
         "<b>━━━━━━━━━━━━━━━━━━\n"
-        f"➥ Season: {season:02d}\n"
-        f"➤ Episode: {episode:02d}\n"
-        f"➥ Quality: Multi Quality [{language_label(language)}]\n"
+        f"☆ Season: {season:02d}\n"
+        f"☆ Episode: {episode:02d}\n"
+        f"☆ Quality: Multi Quality [{language_label(language)}]\n"
         "━━━━━━━━━━━━━━━━━━</b>\n\n"
-        f"<b><blockquote>NEW EPISODE {episode:02d} ADDED 👇</b></blockquote>"
+        f"<b><blockquote>ɴᴇᴡ ᴇᴘɪsᴏᴅᴇ {episode:02d} ᴀᴅᴅᴇᴅ 👇</b></blockquote>"
     )
 
 
@@ -45,15 +45,15 @@ def build_primary_caption(
     return (
         f"<b><blockquote>╰┈➤ {html.escape(title).upper()}</b></blockquote>\n"
         "<b>━━━━━━━━━━━━━━━━━━\n"
-        f"✧ SEASON ✦ {season:02d}\n"
-        f"✧ AUDIO ✦ {language.upper()}\n"
-        f"✧ QUALITY ✦ {quality_text}.\n"
-        f"✧ EPISODE ✦ {episode:02d}\n"
+        f"✧ sᴇᴀsᴏɴ  ✦ {season:02d}\n"
+        f"✧ ᴀᴜᴅɪᴏ   ✦ {language.upper()}\n"
+        f"✧ ǫᴜᴀʟɪᴛʏ ✦ {quality_text}.\n"
+        f"✧ ᴇᴘɪsᴏᴅᴇ ✦ {episode:02d}\n"
         "━━━━━━━━━━━━━━━━━━</b>\n\n"
-        "<blockquote>➤ USE VLC PLAYER OR MX PLAYER TO WATCH THE EPISODES "
-        "WITH GOOD EXPERIENCE !.</blockquote>\n"
-        "<blockquote>≡ NOTE :- NEXT NEW EPISODE NEXT WEEK SO STAY TUNED "
-        "GUYS.!</blockquote>"
+        "<blockquote>➤ ᴜsᴇ ᴠʟᴄ ᴘʟᴀʏᴇʀ ᴏʀ ᴍx ᴘʟᴀʏᴇʀ ᴛᴏ ᴡᴀᴛᴄʜ ᴛʜᴇ ᴇᴘɪsᴏᴅᴇs "
+        "ᴡɪᴛʜ ɢᴏᴏᴅ ᴇxᴘᴇʀɪᴇɴᴄᴇ !.</blockquote>\n"
+        "<blockquote>≡ ɴᴏᴛᴇ :- ɴᴇxᴛ ɴᴇᴡ ᴇᴘɪsᴏᴅᴇ ɴᴇxᴛ ᴡᴇᴇᴋ sᴏ sᴛᴀʏ ᴛᴜɴᴇᴅ "
+        "ɢᴜʏs.!</blockquote>"
     )
 
 
@@ -65,10 +65,10 @@ def strip_style(markup: dict) -> dict:
     return plain
 
 
-async def _call(method: str, data: dict) -> dict:
+async def _call(method: str, data: dict, files: dict | None = None) -> dict:
     url = f"https://api.telegram.org/bot{Config.BOT_TOKEN}/{method}"
-    async with httpx.AsyncClient(timeout=60) as client:
-        resp = await client.post(url, data=data)
+    async with httpx.AsyncClient(timeout=120) as client:
+        resp = await client.post(url, data=data, files=files)
     return resp.json()
 
 
@@ -135,16 +135,29 @@ async def send_primary_post(
         return ""
 
     caption = build_primary_caption(title, season, episode, language, qualities)
-    markup = InlineKeyboardMarkup(
-        [[InlineKeyboardButton("• CLICK HERE TO WATCH •", url=watch_link)]]
-    )
-    try:
+    button = {
+        "text": "• CLICK HERE TO WATCH •",
+        "url": watch_link,
+        "style": "primary",  # blue
+    }
+    plain = {k: v for k, v in button.items() if k != "style"}
+
+    error = ""
+    for btn in (button, plain):
+        data = {
+            "chat_id": chat_id,
+            "parse_mode": "HTML",
+            "reply_markup": json.dumps({"inline_keyboard": [[btn]]}),
+        }
         if poster and os.path.exists(poster):
-            await client.send_photo(
-                chat_id, poster, caption=caption, reply_markup=markup
-            )
+            data["caption"] = caption
+            with open(poster, "rb") as photo:
+                result = await _call("sendPhoto", data, {"photo": photo})
         else:
-            await client.send_message(chat_id, caption, reply_markup=markup)
-        return ""
-    except Exception as e:
-        return str(e)
+            data["text"] = caption
+            result = await _call("sendMessage", data)
+
+        if result.get("ok"):
+            return ""
+        error = result.get("description", "unknown error")
+    return error

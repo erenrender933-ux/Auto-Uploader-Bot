@@ -179,3 +179,13 @@ async def set_primary(client: Client, message: Message):
         )
     await db.set("primary_channel", chat_id)
     await message.reply_text(f"Primary channel set to <b>{chat.title}</b>")
+
+
+@Client.on_message(filters.command("setwatch") & filters.private & OWNER)
+async def set_watch(client: Client, message: Message):
+    value = arg(message)
+    if not value.startswith("https://t.me/"):
+        return await message.reply_text("Usage: /setwatch https://t.me/Anime_Hub_Tamil")
+    await db.set("watch_link", value)
+    await message.reply_text("Watch link updated.")
+    

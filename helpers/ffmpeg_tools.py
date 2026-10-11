@@ -68,9 +68,11 @@ async def process_video(
     watermark_text: str,
     watermark_enabled: bool,
     metadata_enabled: bool,
+    quality: str = "",
     duration: int = 0,
     on_progress=None,
 ) -> tuple[bool, str]:
+    profile = PROFILES.get(quality, DEFAULT_PROFILE)
     cmd = ["ffmpeg", "-y", "-i", input_path, "-map", "0"]
 
     if watermark_enabled and watermark_text:
@@ -79,11 +81,20 @@ async def process_video(
             f"fontfile={FONT}:fontcolor=white@0.5:"
             f"fontsize=h/28:x=w-tw-20:y=20"
         )
-        cmd += ["-vf", drawtext, "-c:v", "libx264", "-preset", "veryfast", "-crf", "23"]
+        vf = f"scale=-2:'min(ih,{profile['height']})',{drawtext}"
+        bufsize = f"{int(profile['maxrate'][:-1]) * 2}k"
+        cmd += [
+            "-vf", vf,
+            "-c:v", "libx264", "-preset", "veryfast",
+            "-crf", str(profile["crf"]),
+            "-maxrate", profile["maxrate"], "-bufsize", bufsize,
+            "-pix_fmt", "yuv420p",
+            "-c:a", "aac", "-b:a", profile["audio"], "-ac", "2",
+        ]
     else:
-        cmd += ["-c:v", "copy"]
+        cmd += ["-c:v", "copy", "-c:a", "copy"]
 
-    cmd += ["-c:a", "copy", "-c:s", "copy"]
+    cmd += ["-c:s", "copy"]
 
     if metadata_enabled:
         cmd += [

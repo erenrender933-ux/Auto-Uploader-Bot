@@ -1,6 +1,7 @@
 import asyncio
 import json
 import os
+import re
 
 FONT = "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
 
@@ -21,6 +22,10 @@ LANG_CODES = {
     "Kannada": {"kan", "kn", "kannada"},
     "English": {"eng", "en", "english"},
     "Japanese": {"jpn", "ja", "jap", "japanese"},
+}
+ISO3 = {
+    "Tamil": "tam", "Telugu": "tel", "Hindi": "hin", "Malayalam": "mal",
+    "Kannada": "kan", "English": "eng", "Japanese": "jpn",
 }
 
 
@@ -77,6 +82,20 @@ async def probe(path: str) -> dict:
     return info
 
 
+async def mean_volume(path: str, start: float, length: int = 30):
+    """Mean volume (dB) of the first audio track. About -91 means silence."""
+    cmd = [
+        "ffmpeg", "-hide_banner", "-nostats",
+        "-ss", str(int(start)), "-t", str(length), "-i", path,
+        "-map", "0:a:0", "-vn", "-af", "volumedetect", "-f", "null", "-",
+    ]
+    _, _, err = await _run(cmd)
+    match = re.search(r"mean_volume:\s*(-inf|-?[\d.]+) dB", err)
+    if not match:
+        return None
+    return -99.0 if match.group(1) == "-inf" else float(match.group(1))
+
+
 async def make_thumbnail(path: str, out_path: str, duration: int) -> str | None:
     at = max(duration // 10, 1)
     cmd = [
@@ -108,6 +127,8 @@ async def process_video(
     quality: str = "",
     duration: int = 0,
     audio_indexes: list | None = None,
+    has_audio: bool = True,
+    language: str = "",
     on_progress=None,
 ) -> tuple[bool, str]:
     profile = PROFILES.get(quality, DEFAULT_PROFILE)
@@ -117,7 +138,7 @@ async def process_video(
         cmd = ["ffmpeg", "-y", "-i", input_path, "-map", "0:v:0"]
         for i in audio_indexes:
             cmd += ["-map", f"0:a:{i}"]
-        cmd += ["-sn", "-dn", "-map_chapters", "-1"]
+        cmd += ["-sn", "-dn"]
     else:
         # keep everything: first video, every audio, subtitles, attachments
         cmd = [
@@ -126,38 +147,51 @@ async def process_video(
             "-c:s", "copy",
         ]
 
+    cmd += ["-map_chapters", "-1"]
+
     if watermark_enabled and watermark_text:
         drawtext = (
             f"drawtext=text='{_escape(watermark_text)}':"
             f"fontfile={FONT}:fontcolor=white@0.5:"
             f"fontsize=h/28:x=w-tw-20:y=20"
         )
-        vf = f"scale=-2:'min(ih,{profile['height']})',{drawtext}"
+        vf = (
+            f"scale=-2:'min(ih,{profile['height']})':flags=fast_bilinear,"
+            f"{drawtext}"
+        )
         bufsize = f"{int(profile['maxrate'][:-1]) * 2}k"
         cmd += [
             "-vf", vf,
-            "-c:v", "libx264", "-preset", "veryfast",
+            "-c:v", "libx264", "-preset", "superfast",
             "-profile:v", "high", "-level", "4.1",
             "-crf", str(profile["crf"]),
             "-maxrate", profile["maxrate"], "-bufsize", bufsize,
             "-pix_fmt", "yuv420p",
-            # AAC stereo 48 kHz plays everywhere (VLC, MX Player, phones)
             "-c:a", "aac", "-b:a", profile["audio"],
             "-ac", "2", "-ar", "48000",
-            "-af", "aresample=async=1:first_pts=0",
         ]
     else:
         cmd += ["-c:v", "copy", "-c:a", "copy"]
 
     if audio_indexes:
         cmd += ["-disposition:a:0", "default"]
+        if language in ISO3:
+            for n in range(len(audio_indexes)):
+                cmd += [f"-metadata:s:a:{n}", f"language={ISO3[language]}"]
 
     if metadata_enabled:
         cmd += [
+            "-map_metadata", "-1",  # remove the old tags from the source
             "-metadata", f"title={title}",
             "-metadata", f"author={author}",
-            "-metadata:s:v:0", f"title={author}",
+            "-metadata", f"artist={author}",
+            "-metadata", f"comment={author}",
+            "-metadata", f"encoded_by={author}",
+            "-metadata:s:v", f"title={author}",
+            "-fflags", "+bitexact", "-flags:v", "+bitexact", "-flags:a", "+bitexact",
         ]
+        if has_audio:
+            cmd += ["-metadata:s:a", f"title={author}"]
 
     cmd += [
         "-max_muxing_queue_size", "1024",
@@ -170,15 +204,18 @@ async def process_video(
     )
     err_task = asyncio.create_task(proc.stderr.read())
 
+    seconds, size = 0.0, 0
     while True:
         line = await proc.stdout.readline()
         if not line:
             break
         key, _, value = line.decode(errors="ignore").strip().partition("=")
-        if key in ("out_time_us", "out_time_ms") and value.isdigit():
-            if on_progress and duration:
-                seconds = min(int(value) / 1_000_000, duration)
-                await on_progress(seconds, duration)
+        if key == "total_size" and value.isdigit():
+            size = int(value)
+        elif key in ("out_time_us", "out_time_ms") and value.isdigit():
+            seconds = int(value) / 1_000_000
+        elif key == "progress" and on_progress and duration:
+            await on_progress(min(seconds, duration), duration, size)
 
     await proc.wait()
     err = (await err_task).decode(errors="ignore")
@@ -186,5 +223,6 @@ async def process_video(
     if proc.returncode != 0:
         return False, err[-500:]
     if on_progress and duration:
-        await on_progress(duration, duration)
+        final = os.path.getsize(output_path) if os.path.exists(output_path) else size
+        await on_progress(duration, duration, final)
     return True, ""

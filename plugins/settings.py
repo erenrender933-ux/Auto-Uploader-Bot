@@ -25,6 +25,9 @@ async def show_settings(client: Client, message: Message):
         "<b>Settings</b>\n\n"
         f"<b>Target channel:</b> <code>{cfg['target_channel']}</code>\n"
         f"<b>Main channels:</b>\n{mains}\n"
+        f"<b>Primary channel:</b> <code>{cfg.get('primary_channel')}</code>\n"
+        f"<b>Watch link:</b> {cfg.get('watch_link')}\n"
+        f"<b>Keep language:</b> {cfg.get('keep_language') or 'OFF (keep all)'}\n"
         f"<b>File store bot:</b> @{cfg['filestore_bot']}\n"
         f"<b>Join link:</b> {cfg['join_link']}\n\n"
         f"<b>Watermark:</b> {onoff(cfg['watermark_enabled'])} "
@@ -189,4 +192,28 @@ async def set_watch(client: Client, message: Message):
         return await message.reply_text("Usage: /setwatch https://t.me/Anime_Hub_Tamil")
     await db.set("watch_link", value)
     await message.reply_text("Watch link updated.")
+
+
+@Client.on_message(filters.command("setlang") & filters.private & OWNER)
+async def set_lang(client: Client, message: Message):
+    value = arg(message).strip()
+    if value.lower() in ("off", "none", "all"):
+        await db.set("keep_language", "")
+        return await message.reply_text(
+            "Language filter OFF. All audio and subtitle streams are kept."
+        )
+
+    match = next((n for n in LANG_CODES if n.lower() == value.lower()), None)
+    if not match:
+        return await message.reply_text(
+            "Usage: /setlang Tamil\nOptions: " + ", ".join(LANG_CODES)
+            + "\n/setlang off to keep everything"
+        )
+    await db.set("keep_language", match)
+    await message.reply_text(
+        f"Language set to <b>{match}</b>.\n"
+        f"Only {match} audio is kept. Other audio, subtitles and extra "
+        "streams are removed."
+    )
+    
     

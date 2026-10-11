@@ -27,16 +27,18 @@ async def probe(path: str) -> dict:
         "-show_format", "-show_streams", path,
     ]
     code, out, _ = await _run(cmd)
-    info = {"duration": 0, "width": 0, "height": 0}
+    info = {"duration": 0, "width": 0, "height": 0, "audio": []}
     if code != 0:
         return info
     data = json.loads(out)
     info["duration"] = int(float(data.get("format", {}).get("duration", 0)))
     for stream in data.get("streams", []):
-        if stream.get("codec_type") == "video":
+        kind = stream.get("codec_type")
+        if kind == "video" and not info["width"]:
             info["width"] = stream.get("width", 0)
             info["height"] = stream.get("height", 0)
-            break
+        elif kind == "audio":
+            info["audio"].append(stream.get("codec_name", "unknown"))
     return info
 
 
@@ -73,7 +75,12 @@ async def process_video(
     on_progress=None,
 ) -> tuple[bool, str]:
     profile = PROFILES.get(quality, DEFAULT_PROFILE)
-    cmd = ["ffmpeg", "-y", "-i", input_path, "-map", "0"]
+
+    # explicit mapping: first video, every audio, every subtitle, attachments
+    cmd = [
+        "ffmpeg", "-y", "-i", input_path,
+        "-map", "0:v:0", "-map", "0:a?", "-map", "0:s?", "-map", "0:t?",
+    ]
 
     if watermark_enabled and watermark_text:
         drawtext = (
@@ -86,10 +93,14 @@ async def process_video(
         cmd += [
             "-vf", vf,
             "-c:v", "libx264", "-preset", "veryfast",
+            "-profile:v", "high", "-level", "4.1",
             "-crf", str(profile["crf"]),
             "-maxrate", profile["maxrate"], "-bufsize", bufsize,
             "-pix_fmt", "yuv420p",
-            "-c:a", "aac", "-b:a", profile["audio"], "-ac", "2",
+            # AAC stereo 48 kHz plays everywhere (VLC, MX Player, phones)
+            "-c:a", "aac", "-b:a", profile["audio"],
+            "-ac", "2", "-ar", "48000",
+            "-af", "aresample=async=1:first_pts=0",
         ]
     else:
         cmd += ["-c:v", "copy", "-c:a", "copy"]

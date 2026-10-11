@@ -1,5 +1,6 @@
 import asyncio
 import time
+from pyrogram.errors import FloodWait, MessageNotModified
 
 
 def humanbytes(size: float) -> str:

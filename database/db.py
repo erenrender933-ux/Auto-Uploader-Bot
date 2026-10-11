@@ -3,6 +3,7 @@ from config import Config
 
 DEFAULTS = {
     "_id": "global",
+    "keep_language": "",
     "watch_link": Config.WATCH_LINK,
     "rename_format": "[AnimeHubTamil] {title} S{season}E{episode} [{quality}] [{language}]",
     "watermark_text": "Anime Hub Tamil",

@@ -11,7 +11,9 @@ from config import Config
 from database.db import db
 from helpers.anilist import download_poster, fetch_anime
 from helpers.buttons import join_markup
-from helpers.ffmpeg_tools import make_thumbnail, pick_audio, probe, process_video
+from helpers.ffmpeg_tools import (
+    make_thumbnail, mean_volume, pick_audio, probe, process_video,
+)
 from helpers.link import make_link
 from helpers.progress import Progress, ProgressSink
 from helpers.thumb import prepare_thumb
@@ -172,27 +174,55 @@ async def open_posts(client: Client, cfg: dict, info: dict, poster):
     return posts, sinks
 
 
+# ---------- download (also used to prefetch the next file) ----------
+
+async def download_source(client, item, progress=None):
+    if item.get("local_path"):
+        return item["local_path"]  # already downloaded by /leech
+    msg = await client.get_messages(item["chat_id"], item["msg_id"])
+    return await client.download_media(
+        msg,
+        file_name=os.path.join(WORK_DIR, f"src_{item['msg_id']}.mkv"),
+        progress=progress.update if progress else None,
+    )
+
+
 # ---------- one file ----------
 
-async def process_file(client, chat_id, item, cfg, posts, sinks, saved_thumb):
-    info = {k: item[k] for k in ("title", "season", "episode", "language", "quality")}
+async def process_file(
+    client, chat_id, item, cfg, posts, sinks, saved_thumb,
+    stats, task_id, pre, nxt,
+):
+    """Returns (link or None, download task of the next file or None)."""
     target = cfg["target_channel"]
-    progress = Progress(info, sinks)
     label = html.escape(
         f"{item['title']} S{item['season']:02d}E{item['episode']:02d} "
         f"[{item['quality']}]"
     )
 
-    src_path = out_path = auto_thumb = None
-    try:
-        msg = await client.get_messages(item["chat_id"], item["msg_id"])
-
-        progress.set_stage("Downloading")
-        src_path = await client.download_media(
-            msg,
-            file_name=os.path.join(WORK_DIR, f"src_{item['msg_id']}.mkv"),
-            progress=progress.update,
+    if cfg["rename_enabled"]:
+        new_name = build_name(cfg["rename_format"], item)
+    else:
+        new_name = os.path.splitext(item["name"])[0] or build_name(
+            "{title} S{season}E{episode} [{quality}]", item
         )
+    out_name = f"{safe_name(new_name)}.mkv"
+    progress = Progress(out_name, sinks, stats, task_id)
+
+    src_path = out_path = auto_thumb = None
+    next_task = None
+    try:
+        if pre is not None:
+            if not pre.done():
+                await progress.status("Downloading")
+            src_path = await pre
+        else:
+            progress.set_stage("Downloading")
+            src_path = await download_source(client, item, progress)
+
+        # start downloading the next file while this one is encoding
+        if nxt is not None:
+            next_task = asyncio.create_task(download_source(client, nxt))
 
         meta = await probe(src_path)
 
@@ -209,15 +239,9 @@ async def process_file(client, chat_id, item, cfg, posts, sinks, saved_thumb):
                     f"No {wanted} audio found. Audio tracks: {found}"
                 )
 
-        if cfg["rename_enabled"]:
-            new_name = build_name(cfg["rename_format"], item)
-        else:
-            new_name = os.path.splitext(item["name"])[0] or build_name(
-                "{title} S{season}E{episode} [{quality}]", item
-            )
-        out_path = os.path.join(WORK_DIR, f"{safe_name(new_name)}.mkv")
+        out_path = os.path.join(WORK_DIR, out_name)
 
-        progress.set_stage("Encoding Files")
+        progress.set_stage("Encoding")
         ok, error = await process_video(
             src_path,
             out_path,
@@ -229,14 +253,31 @@ async def process_file(client, chat_id, item, cfg, posts, sinks, saved_thumb):
             quality=item["quality"],
             duration=meta["duration"],
             audio_indexes=audio_indexes,
+            has_audio=bool(meta["audio"]),
+            language=wanted or "",
             on_progress=progress.update_encode,
         )
         if not ok:
             raise RuntimeError(f"ffmpeg failed: {error}")
 
+        # make sure the output really has sound
         out_meta = await probe(out_path)
-        if meta["audio"] and not out_meta["audio"]:
-            raise RuntimeError("Output file has no audio. Upload stopped.")
+        out_vol = None
+        if meta["audio"]:
+            if not out_meta["audio"]:
+                raise RuntimeError("Output file has no audio. Upload stopped.")
+            mid = meta["duration"] * 0.4 if meta["duration"] else 0
+            out_vol = await mean_volume(out_path, mid)
+            if out_vol is None or out_vol < -80:
+                src_vol = await mean_volume(src_path, mid)
+                tracks = ", ".join(
+                    f"{c}({s['lang'] or 'und'})"
+                    for c, s in zip(meta["audio"], meta["audio_streams"])
+                )
+                raise RuntimeError(
+                    f"Output audio is silent ({out_vol} dB). "
+                    f"Source audio: {src_vol} dB. Tracks: {tracks}"
+                )
 
         thumb = saved_thumb
         if not thumb:
@@ -265,14 +306,22 @@ async def process_file(client, chat_id, item, cfg, posts, sinks, saved_thumb):
         )
         await progress.status(f"{item['quality']} Uploaded")
 
-        await client.send_message(chat_id, f"<b>Upload completed:</b> {label}")
-        return link
+        audio_info = (
+            f"{', '.join(meta['audio']) or 'none'} -> "
+            f"{', '.join(out_meta['audio']) or 'none'}"
+        )
+        await client.send_message(
+            chat_id,
+            f"<b>Upload completed:</b> {label}\n"
+            f"<code>Audio: {audio_info} | volume {out_vol} dB</code>",
+        )
+        return link, next_task
 
     except Exception as e:
         await client.send_message(
             chat_id, f"<b>Failed:</b> {label}\n<code>{html.escape(str(e))}</code>"
         )
-        return None
+        return None, next_task
 
     finally:
         remove(src_path)
@@ -282,7 +331,7 @@ async def process_file(client, chat_id, item, cfg, posts, sinks, saved_thumb):
 
 # ---------- whole queue ----------
 
-async def run_queue(client, chat_id, user_id, items, cfg):
+async def run_queue(client, chat_id, user_id, items, cfg, stats, task_id):
     anime_groups = defaultdict(list)
     for item in items:
         anime_groups[(item["title"], item["season"])].append(item)
@@ -311,13 +360,19 @@ async def run_queue(client, chat_id, user_id, items, cfg):
             }
             posts, sinks = await open_posts(client, cfg, info, poster)
             links = {}
+            pre = None
 
-            for item in files:
+            for idx, item in enumerate(files):
                 if STATE["cancel"]:
+                    if pre:
+                        pre.cancel()
                     break
-                link = await process_file(
-                    client, chat_id, item, cfg, posts, sinks, thumb
+                nxt = files[idx + 1] if idx + 1 < len(files) else None
+                link, pre = await process_file(
+                    client, chat_id, item, cfg, posts, sinks, thumb,
+                    stats, task_id, pre, nxt,
                 )
+                stats["done"] += 1
                 if link:
                     links[item["quality"]] = link
                     uploaded += 1
@@ -394,12 +449,17 @@ async def start_process(client: Client, message: Message):
             item["language"] = keep
     unify_titles(items)
 
+    task_id = await db.next_task_id()
+    stats = {"done": 0, "total": len(items)}
+
     STATE.update(running=True, cancel=False)
     QUEUE[user_id] = []
-    await message.reply_text(f"Upload process started for {len(items)} file(s).")
+    await message.reply_text(
+        f"Upload process started for {len(items)} file(s). Task ID: {task_id}"
+    )
 
     try:
-        await run_queue(client, message.chat.id, user_id, items, cfg)
+        await run_queue(client, message.chat.id, user_id, items, cfg, stats, task_id)
     finally:
         STATE["running"] = False
 

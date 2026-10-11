@@ -116,3 +116,31 @@ class Progress:
             + f"<blockquote><b>{make_bar(percent)} {percent:.1f}%</b></blockquote>\n\n"
             + f"⏱️<b>ETA:</b> {human_time(eta)}"
         )
+
+
+class ProgressSink:
+    """A separate progress message under the main channel post."""
+
+    def __init__(self, message, markup=None):
+        self.message = message
+        self.markup = markup
+        self._last = None
+
+    async def edit(self, text: str):
+        if text == self._last:
+            return
+        try:
+            await self.message.edit_text(text, reply_markup=self.markup)
+            self._last = text
+        except MessageNotModified:
+            self._last = text
+        except FloodWait as e:
+            await asyncio.sleep(e.value)
+        except Exception:
+            pass
+
+    async def delete(self):
+        try:
+            await self.message.delete()
+        except Exception:
+            pass

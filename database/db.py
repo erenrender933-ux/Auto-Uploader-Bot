@@ -3,6 +3,10 @@ from config import Config
 
 DEFAULTS = {
     "_id": "global",
+    "watch_link": Config.WATCH_LINK,
+    "rename_format": "[AnimeHubTamil] {title} S{season}E{episode} [{quality}] [{language}]",
+    "watermark_text": "Anime Hub Tamil",
+    "metadata_title": "Anime Hub Tamil",
     "target_channel": Config.TARGET_CHANNEL,
     "main_channels": Config.MAIN_CHANNELS,
     "join_link": Config.JOIN_LINK,

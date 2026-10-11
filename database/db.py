@@ -1,4 +1,5 @@
 from motor.motor_asyncio import AsyncIOMotorClient
+from pymongo import ReturnDocument
 from config import Config
 
 DEFAULTS = {
@@ -30,6 +31,15 @@ class Database:
         self.client = AsyncIOMotorClient(Config.MONGO_URI)
         self.db = self.client[Config.DB_NAME]
         self.settings = self.db["settings"]
+
+    async def next_task_id(self) -> int:
+        doc = await self.db["counters"].find_one_and_update(
+            {"_id": "task"},
+            {"$inc": {"value": 1}},
+            upsert=True,
+            return_document=ReturnDocument.AFTER,
+        )
+        return doc["value"]
 
     async def get(self) -> dict:
         doc = await self.settings.find_one({"_id": "global"})

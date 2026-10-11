@@ -195,7 +195,9 @@ async def process_file(client, chat_id, item, cfg, posts, sinks, saved_thumb):
             on_progress=progress.update_encode,
         )
         if not ok:
-            raise RuntimeError(f"ffmpeg failed: {error}")
+            out_meta = await probe(out_path)
+        if meta["audio"] and not out_meta["audio"]:
+            raise RuntimeError("Output file has no audio. Upload stopped.")
 
         thumb = saved_thumb
         if not thumb:
@@ -289,9 +291,7 @@ async def run_queue(client, chat_id, user_id, items, cfg):
 
             if links:
                 if not STATE["cancel"]:
-                    watch_link = next(
-                        (p.link for p in posts if p.link), cfg["join_link"]
-                    )
+                    watch_link = cfg.get("watch_link") or cfg["join_link"]
                     error = await send_primary_post(
                         client, cfg, title, season, episode, language,
                         list(links.keys()), poster, watch_link,

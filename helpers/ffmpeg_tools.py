@@ -12,6 +12,31 @@ PROFILES = {
 }
 DEFAULT_PROFILE = {"height": 720, "crf": 28, "maxrate": "800k", "audio": "96k"}
 
+# Language names and the codes / words used in audio stream tags
+LANG_CODES = {
+    "Tamil": {"tam", "ta", "tamil"},
+    "Telugu": {"tel", "te", "telugu"},
+    "Hindi": {"hin", "hi", "hindi"},
+    "Malayalam": {"mal", "ml", "malayalam"},
+    "Kannada": {"kan", "kn", "kannada"},
+    "English": {"eng", "en", "english"},
+    "Japanese": {"jpn", "ja", "jap", "japanese"},
+}
+
+
+def pick_audio(streams: list, language: str) -> list:
+    """Return the audio stream positions (0-based) matching the language."""
+    codes = LANG_CODES.get(language, {language.lower()})
+    names = {c for c in codes if len(c) > 3}
+    picked = []
+    for i, s in enumerate(streams):
+        title = s.get("title", "")
+        if s.get("lang", "") in codes or any(n in title for n in names):
+            picked.append(i)
+    if not picked and len(streams) == 1:
+        picked = [0]  # single track without a language tag
+    return picked
+
 
 async def _run(cmd: list):
     proc = await asyncio.create_subprocess_exec(
@@ -82,15 +107,24 @@ async def process_video(
     metadata_enabled: bool,
     quality: str = "",
     duration: int = 0,
+    audio_indexes: list | None = None,
     on_progress=None,
 ) -> tuple[bool, str]:
     profile = PROFILES.get(quality, DEFAULT_PROFILE)
 
-    # explicit mapping: first video, every audio, every subtitle, attachments
-    cmd = [
-        "ffmpeg", "-y", "-i", input_path,
-        "-map", "0:v:0", "-map", "0:a?", "-map", "0:s?", "-map", "0:t?",
-    ]
+    if audio_indexes is not None:
+        # language filter: video + chosen audio only, nothing else
+        cmd = ["ffmpeg", "-y", "-i", input_path, "-map", "0:v:0"]
+        for i in audio_indexes:
+            cmd += ["-map", f"0:a:{i}"]
+        cmd += ["-sn", "-dn", "-map_chapters", "-1"]
+    else:
+        # keep everything: first video, every audio, subtitles, attachments
+        cmd = [
+            "ffmpeg", "-y", "-i", input_path,
+            "-map", "0:v:0", "-map", "0:a?", "-map", "0:s?", "-map", "0:t?",
+            "-c:s", "copy",
+        ]
 
     if watermark_enabled and watermark_text:
         drawtext = (
@@ -115,7 +149,8 @@ async def process_video(
     else:
         cmd += ["-c:v", "copy", "-c:a", "copy"]
 
-    cmd += ["-c:s", "copy"]
+    if audio_indexes:
+        cmd += ["-disposition:a:0", "default"]
 
     if metadata_enabled:
         cmd += [

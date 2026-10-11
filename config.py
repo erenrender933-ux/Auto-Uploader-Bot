@@ -6,6 +6,7 @@ load_dotenv()
 
 class Config:
     API_ID = int(os.getenv("API_ID", 0))
+    WATCH_LINK = os.getenv("WATCH_LINK", "https://t.me/Anime_Hub_Tamil")
     PRIMARY_CHANNEL = int(os.getenv("PRIMARY_CHANNEL", 0))
     API_HASH = os.getenv("API_HASH", "")
     BOT_TOKEN = os.getenv("BOT_TOKEN", "")

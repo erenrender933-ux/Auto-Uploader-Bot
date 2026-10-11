@@ -12,10 +12,10 @@ from helpers.anilist import download_poster, fetch_anime
 from helpers.buttons import join_markup
 from helpers.ffmpeg_tools import make_thumbnail, probe, process_video
 from helpers.link import make_link
-from helpers.progress import Progress
+from helpers.progress import Progress, ProgressSink
 from helpers.thumb import prepare_thumb
 from plugins.collector import QUEUE
-from plugins.post import PostSink, build_caption
+from plugins.post import PostSink, build_caption, send_primary_post
 
 OWNER = filters.user(Config.OWNER_ID)
 
@@ -121,40 +121,40 @@ async def get_thumb(client, chat_id, user_id, title, cfg):
     return None
 
 
-# ---------- main channel progress posts ----------
+# ---------- main channel: post on top, progress message below ----------
 
 async def open_posts(client: Client, cfg: dict, info: dict, poster):
-    join = join_markup(cfg["join_link"])
-    text = (
-        f"<b>{info['title']}</b>\n\n"
-        f"<b>Season:</b> {int(info['season']):02d}\n"
-        f"<b>Episode:</b> {int(info['episode']):02d}\n"
-        f"<b>Language:</b> {info['language']}\n\n"
-        "<b>Preparing...</b>"
+    caption = build_caption(
+        info["title"], info["season"], info["episode"], info["language"]
     )
-    posts = []
+    join = join_markup(cfg["join_link"])
+    posts, sinks = [], []
+
     for chat_id in cfg["main_channels"]:
         try:
             if poster and os.path.exists(poster):
-                msg = await client.send_photo(
-                    chat_id, poster, caption=text, reply_markup=join
-                )
+                msg = await client.send_photo(chat_id, poster, caption=caption)
             else:
-                msg = await client.send_message(chat_id, text, reply_markup=join)
-            posts.append(
-                PostSink(chat_id, msg.id, bool(msg.photo), cfg["join_link"])
+                msg = await client.send_message(chat_id, caption)
+            posts.append(PostSink(chat_id, msg.id, getattr(msg, "link", None)))
+
+            prog = await client.send_message(
+                chat_id,
+                f"<b>{info['title']}</b>\n\n<b>Preparing...</b>",
+                reply_markup=join,
             )
+            sinks.append(ProgressSink(prog, join))
         except Exception:
             pass
-    return posts
+    return posts, sinks
 
 
 # ---------- one file ----------
 
-async def process_file(client, chat_id, item, cfg, posts, saved_thumb):
+async def process_file(client, chat_id, item, cfg, posts, sinks, saved_thumb):
     info = {k: item[k] for k in ("title", "season", "episode", "language", "quality")}
     target = cfg["target_channel"]
-    progress = Progress(info, posts)
+    progress = Progress(info, sinks)
     label = (
         f"{item['title']} S{item['season']:02d}E{item['episode']:02d} "
         f"[{item['quality']}]"
@@ -190,6 +190,7 @@ async def process_file(client, chat_id, item, cfg, posts, saved_thumb):
             watermark_text=cfg["watermark_text"],
             watermark_enabled=cfg["watermark_enabled"],
             metadata_enabled=cfg["metadata_enabled"],
+            quality=item["quality"],
             duration=meta["duration"],
             on_progress=progress.update_encode,
         )
@@ -215,9 +216,12 @@ async def process_file(client, chat_id, item, cfg, posts, saved_thumb):
 
         link = make_link(cfg["filestore_bot"], target, sent.id)
 
-        # add this quality's button to the main channel post right now
+        # add this quality's button to every main channel post right away
         for post in posts:
             post.add_link(item["quality"], link)
+        await asyncio.gather(
+            *(post.push_buttons() for post in posts), return_exceptions=True
+        )
         await progress.status(f"{item['quality']} Uploaded")
 
         await client.send_message(chat_id, f"<b>Upload completed:</b> {label}")
@@ -264,24 +268,39 @@ async def run_queue(client, chat_id, user_id, items, cfg):
                 "title": title, "season": season,
                 "episode": episode, "language": language,
             }
-            posts = await open_posts(client, cfg, info, poster)
-            got_any = False
+            posts, sinks = await open_posts(client, cfg, info, poster)
+            links = {}
 
             for item in files:
                 if STATE["cancel"]:
                     break
-                link = await process_file(client, chat_id, item, cfg, posts, thumb)
+                link = await process_file(
+                    client, chat_id, item, cfg, posts, sinks, thumb
+                )
                 if link:
-                    got_any = True
+                    links[item["quality"]] = link
                     uploaded += 1
                 else:
                     failed += 1
 
-            if got_any:
-                caption = build_caption(title, season, episode, language)
-                await asyncio.gather(
-                    *(p.finalize(caption) for p in posts), return_exceptions=True
-                )
+            # progress messages are removed when the episode is done
+            for sink in sinks:
+                await sink.delete()
+
+            if links:
+                if not STATE["cancel"]:
+                    watch_link = next(
+                        (p.link for p in posts if p.link), cfg["join_link"]
+                    )
+                    error = await send_primary_post(
+                        client, cfg, title, season, episode, language,
+                        list(links.keys()), poster, watch_link,
+                    )
+                    if error:
+                        await client.send_message(
+                            chat_id,
+                            f"Primary channel post failed:\n<code>{error}</code>",
+                        )
             else:
                 for post in posts:
                     try:

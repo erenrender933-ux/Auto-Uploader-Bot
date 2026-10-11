@@ -165,3 +165,17 @@ async def toggle_metadata(client: Client, message: Message):
         return await message.reply_text("Usage: /metadata on or /metadata off")
     await db.set("metadata_enabled", value == "on")
     await message.reply_text(f"Metadata {value.upper()}")
+
+
+@Client.on_message(filters.command("setprimary") & filters.private & OWNER)
+async def set_primary(client: Client, message: Message):
+    try:
+        chat_id = int(arg(message))
+        chat = await client.get_chat(chat_id)
+    except Exception:
+        return await message.reply_text(
+            "Usage: /setprimary -100xxxxxxxxxx\n"
+            "Make sure the bot is an admin in that channel."
+        )
+    await db.set("primary_channel", chat_id)
+    await message.reply_text(f"Primary channel set to <b>{chat.title}</b>")

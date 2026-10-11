@@ -5,10 +5,13 @@ import json
 import os
 
 import httpx
+from pyrogram import Client
+from pyrogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 
 from config import Config
 from helpers.buttons import raw_quality_markup
 
+QUALITY_ORDER = ["480p", "720p", "1080p", "2160p", "HDRIP"]
 AUDIO_LANGUAGES = {"Tamil", "Telugu", "Hindi", "Malayalam", "Kannada"}
 
 
@@ -22,13 +25,35 @@ def language_label(language: str) -> str:
 
 def build_caption(title: str, season: int, episode: int, language: str) -> str:
     return (
-        f"<blockquote><b>{html.escape(title)}</blockquote></b>\n"
-        "<b>━━━━━━━━━━━━━━━━━━</b>\n"
-        f"<b>➤ Season: {season:02d}\n"
+        f"<b><blockquote>{html.escape(title)}</b></blockquote>\n"
+        "<b>━━━━━━━━━━━━━━━━━━\n"
+        f"➥ Season: {season:02d}\n"
         f"➤ Episode: {episode:02d}\n"
-        f"➤ Quality: Multi Quality [{language_label(language)}]</b>\n"
-        "<b>━━━━━━━━━━━━━━━━━━</b>\n\n"
-        f"<b><blockquote>ɴᴇᴡ ᴇᴘɪsᴏᴅᴇ {episode:02d} ᴀᴅᴅᴇᴅ 👇</b></blockquote>"
+        f"➥ Quality: Multi Quality [{language_label(language)}]\n"
+        "━━━━━━━━━━━━━━━━━━</b>\n\n"
+        f"<b><blockquote>NEW EPISODE {episode:02d} ADDED 👇</b></blockquote>"
+    )
+
+
+def build_primary_caption(
+    title: str, season: int, episode: int, language: str, qualities: list
+) -> str:
+    ordered = sorted(
+        qualities, key=lambda q: QUALITY_ORDER.index(q) if q in QUALITY_ORDER else 9
+    )
+    quality_text = ",".join(q.upper() for q in ordered)
+    return (
+        f"<b><blockquote>╰┈➤ {html.escape(title).upper()}</b></blockquote>\n"
+        "<b>━━━━━━━━━━━━━━━━━━\n"
+        f"✧ SEASON ✦ {season:02d}\n"
+        f"✧ AUDIO ✦ {language.upper()}\n"
+        f"✧ QUALITY ✦ {quality_text}.\n"
+        f"✧ EPISODE ✦ {episode:02d}\n"
+        "━━━━━━━━━━━━━━━━━━</b>\n\n"
+        "<blockquote>➤ USE VLC PLAYER OR MX PLAYER TO WATCH THE EPISODES "
+        "WITH GOOD EXPERIENCE !.</blockquote>\n"
+        "<blockquote>≡ NOTE :- NEXT NEW EPISODE NEXT WEEK SO STAY TUNED "
+        "GUYS.!</blockquote>"
     )
 
 
@@ -40,106 +65,46 @@ def strip_style(markup: dict) -> dict:
     return plain
 
 
-async def _call(method: str, data: dict, files: dict | None = None) -> dict:
+async def _call(method: str, data: dict) -> dict:
     url = f"https://api.telegram.org/bot{Config.BOT_TOKEN}/{method}"
     async with httpx.AsyncClient(timeout=60) as client:
-        resp = await client.post(url, data=data, files=files)
+        resp = await client.post(url, data=data)
     return resp.json()
 
 
-async def send_post(chat_id: int, caption: str, markup: dict, poster: str | None):
-    error = ""
-    # first try with coloured buttons, then without colours
-    for attempt in (markup, strip_style(markup)):
-        data = {
-            "chat_id": chat_id,
-            "parse_mode": "HTML",
-            "reply_markup": json.dumps(attempt),
-        }
-        if poster and os.path.exists(poster):
-            data["caption"] = caption
-            with open(poster, "rb") as photo:
-                result = await _call("sendPhoto", data, {"photo": photo})
-        else:
-            data["text"] = caption
-            result = await _call("sendMessage", data)
-
-        if result.get("ok"):
-            return True, ""
-        error = result.get("description", "unknown error")
-    return False, error
-
-
-async def post_to_main_channels(
-    cfg: dict,
-    title: str,
-    season: int,
-    episode: int,
-    language: str,
-    links: dict,
-    poster: str | None,
-) -> list[str]:
-    caption = build_caption(title, season, episode, language)
-    markup = raw_quality_markup(links)
-    errors = []
-    for chat_id in cfg["main_channels"]:
-        ok, error = await send_post(chat_id, caption, markup, poster)
-        if not ok:
-            errors.append(f"{chat_id}: {error}")
-    return errors
-    
-
 class PostSink:
-    """One main-channel post that shows progress and collects quality buttons."""
+    """One main channel post. Quality buttons are added as files finish."""
 
-    def __init__(self, chat_id: int, message_id: int, is_photo: bool, join_link: str):
+    def __init__(self, chat_id: int, message_id: int, link: str | None):
         self.chat_id = chat_id
         self.message_id = message_id
-        self.is_photo = is_photo
-        self.join_link = join_link
+        self.link = link
         self.links: dict = {}
-        self.final = False
         self.styled = True
-        self._last = None
 
     def add_link(self, quality: str, link: str):
         self.links[quality] = link
 
     def _markup(self) -> dict:
-        rows = raw_quality_markup(self.links)["inline_keyboard"] if self.links else []
-        if not self.final:
-            rows = rows + [[{"text": "Join Now", "url": self.join_link}]]
-        markup = {"inline_keyboard": rows}
+        markup = raw_quality_markup(self.links)
         return markup if self.styled else strip_style(markup)
 
-    async def edit(self, text: str):
-        method = "editMessageCaption" if self.is_photo else "editMessageText"
-        text_key = "caption" if self.is_photo else "text"
-
+    async def push_buttons(self) -> bool:
         for _ in range(3):
-            markup = self._markup()
-            key = (text, json.dumps(markup, sort_keys=True))
-            if key == self._last:
-                return
-
             result = await _call(
-                method,
+                "editMessageReplyMarkup",
                 {
                     "chat_id": self.chat_id,
                     "message_id": self.message_id,
-                    text_key: text,
-                    "parse_mode": "HTML",
-                    "reply_markup": json.dumps(markup),
+                    "reply_markup": json.dumps(self._markup()),
                 },
             )
             if result.get("ok"):
-                self._last = key
-                return
+                return True
 
             desc = result.get("description", "")
             if "not modified" in desc:
-                self._last = key
-                return
+                return True
 
             retry = result.get("parameters", {}).get("retry_after")
             if retry:
@@ -149,8 +114,37 @@ class PostSink:
             if self.styled:
                 self.styled = False  # fall back to plain buttons
                 continue
-            return
+            return False
+        return False
 
-    async def finalize(self, caption: str):
-        self.final = True
-        await self.edit(caption)
+
+async def send_primary_post(
+    client: Client,
+    cfg: dict,
+    title: str,
+    season: int,
+    episode: int,
+    language: str,
+    qualities: list,
+    poster: str | None,
+    watch_link: str,
+) -> str:
+    """Post in the primary channel. Returns an error text, or '' on success."""
+    chat_id = cfg.get("primary_channel")
+    if not chat_id:
+        return ""
+
+    caption = build_primary_caption(title, season, episode, language, qualities)
+    markup = InlineKeyboardMarkup(
+        [[InlineKeyboardButton("• CLICK HERE TO WATCH •", url=watch_link)]]
+    )
+    try:
+        if poster and os.path.exists(poster):
+            await client.send_photo(
+                chat_id, poster, caption=caption, reply_markup=markup
+            )
+        else:
+            await client.send_message(chat_id, caption, reply_markup=markup)
+        return ""
+    except Exception as e:
+        return str(e)

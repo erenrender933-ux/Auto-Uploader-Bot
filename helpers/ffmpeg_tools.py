@@ -4,6 +4,14 @@ import os
 
 FONT = "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
 
+# Size control per quality. Raise maxrate for bigger files, lower for smaller.
+PROFILES = {
+    "480p": {"height": 480, "crf": 30, "maxrate": "350k", "audio": "64k"},
+    "720p": {"height": 720, "crf": 29, "maxrate": "650k", "audio": "96k"},
+    "1080p": {"height": 1080, "crf": 28, "maxrate": "1200k", "audio": "128k"},
+}
+DEFAULT_PROFILE = {"height": 720, "crf": 28, "maxrate": "800k", "audio": "96k"}
+
 
 async def _run(cmd: list):
     proc = await asyncio.create_subprocess_exec(

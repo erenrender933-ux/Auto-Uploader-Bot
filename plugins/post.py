@@ -136,7 +136,7 @@ async def send_primary_post(
 
     caption = build_primary_caption(title, season, episode, language, qualities)
     button = {
-        "text": "• CLICK HERE TO WATCH •",
+        "text": "• ᴄʟɪᴄᴋ ʜᴇʀᴇ ᴛᴏ ᴡᴀᴛᴄʜ •",
         "url": watch_link,
         "style": "primary",  # blue
     }

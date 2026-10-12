@@ -4,6 +4,7 @@ from config import Config
 
 DEFAULTS = {
     "_id": "global",
+    "audio_track": 0,
     "keep_language": "",
     "watch_link": Config.WATCH_LINK,
     "rename_format": "[AnimeHubTamil] {title} S{season}E{episode} [{quality}] [{language}]",

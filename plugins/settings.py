@@ -217,3 +217,19 @@ async def set_lang(client: Client, message: Message):
     )
     
     
+@Client.on_message(filters.command("settrack") & filters.private & OWNER)
+async def set_track(client: Client, message: Message):
+    value = arg(message).lower()
+    if value in ("off", "0", "none"):
+        await db.set("audio_track", 0)
+        return await message.reply_text("Track number OFF. Language tags are used.")
+    if not value.isdigit() or int(value) < 1:
+        return await message.reply_text(
+            "Usage: /settrack 2  (keep the 2nd audio track)\n/settrack off"
+        )
+    await db.set("audio_track", int(value))
+    await message.reply_text(
+        f"Audio track {value} will be kept in every file.\n"
+        "Other audio, subtitles and extra streams are removed."
+    )
+    

@@ -28,6 +28,7 @@ async def show_settings(client: Client, message: Message):
         f"<b>Primary channel:</b> <code>{cfg.get('primary_channel')}</code>\n"
         f"<b>Watch link:</b> {cfg.get('watch_link')}\n"
         f"<b>Keep language:</b> {cfg.get('keep_language') or 'OFF (keep all)'}\n"
+        f"<b>Audio track:</b> {cfg.get('audio_track') or 'OFF'}\n"
         f"<b>File store bot:</b> @{cfg['filestore_bot']}\n"
         f"<b>Join link:</b> {cfg['join_link']}\n\n"
         f"<b>Watermark:</b> {onoff(cfg['watermark_enabled'])} "

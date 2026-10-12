@@ -77,6 +77,31 @@ def unify_titles(items: list):
                 canon[key] = item["title"]
 
 
+def build_order(items: list) -> list:
+    """Exact processing order: anime, then episode 01, 02, ... then quality."""
+    groups = defaultdict(list)
+    for item in items:
+        groups[(item["title"], item["season"])].append(item)
+
+    order = []
+    for group in groups.values():
+        episodes = defaultdict(list)
+        for item in group:
+            episodes[(item["episode"], item["language"])].append(item)
+        for _, files in sorted(episodes.items()):
+            files.sort(key=lambda f: QUALITY_ORDER.get(f["quality"], 9))
+            order.extend(files)
+    return order
+
+
+def describe_tracks(meta: dict) -> str:
+    parts = []
+    for i, (codec, s) in enumerate(zip(meta["audio"], meta["audio_streams"]), 1):
+        title = f" '{s['title']}'" if s["title"] else ""
+        parts.append(f"#{i} {s['lang'] or 'und'} {codec}{title}")
+    return ", ".join(parts) or "none"
+
+
 # ---------- asking for photos (poster / thumbnail) ----------
 
 @Client.on_message(filters.private & OWNER & (filters.photo | filters.command("skip")))
@@ -226,17 +251,24 @@ async def process_file(
 
         meta = await probe(src_path)
 
-        # language filter: keep only the chosen audio language
+        # stream filter: keep only one audio track, drop everything else
         audio_indexes = None
         wanted = cfg.get("keep_language")
-        if wanted:
+        track = int(cfg.get("audio_track") or 0)
+        if track:
+            if track > len(meta["audio_streams"]):
+                raise RuntimeError(
+                    f"Audio track {track} not found. This file has "
+                    f"{len(meta['audio_streams'])} audio track(s): "
+                    f"{describe_tracks(meta)}"
+                )
+            audio_indexes = [track - 1]
+        elif wanted:
             audio_indexes = pick_audio(meta["audio_streams"], wanted)
             if not audio_indexes:
-                found = ", ".join(
-                    s["lang"] or "und" for s in meta["audio_streams"]
-                ) or "none"
                 raise RuntimeError(
-                    f"No {wanted} audio found. Audio tracks: {found}"
+                    f"No {wanted} audio found. Tracks: {describe_tracks(meta)}. "
+                    "Use /settrack N to pick one by number."
                 )
 
         out_path = os.path.join(WORK_DIR, out_name)
@@ -260,8 +292,19 @@ async def process_file(
         if not ok:
             raise RuntimeError(f"ffmpeg failed: {error}")
 
-        # make sure the output really has sound
         out_meta = await probe(out_path)
+
+        # the filter must leave exactly the chosen audio and no subtitles
+        if audio_indexes is not None and (
+            len(out_meta["audio"]) != len(audio_indexes) or out_meta["subs"]
+        ):
+            raise RuntimeError(
+                "Stream filter failed: output has "
+                f"{len(out_meta['audio'])} audio and {out_meta['subs']} "
+                "subtitle streams"
+            )
+
+        # make sure the output really has sound
         out_vol = None
         if meta["audio"]:
             if not out_meta["audio"]:
@@ -270,13 +313,9 @@ async def process_file(
             out_vol = await mean_volume(out_path, mid)
             if out_vol is None or out_vol < -80:
                 src_vol = await mean_volume(src_path, mid)
-                tracks = ", ".join(
-                    f"{c}({s['lang'] or 'und'})"
-                    for c, s in zip(meta["audio"], meta["audio_streams"])
-                )
                 raise RuntimeError(
                     f"Output audio is silent ({out_vol} dB). "
-                    f"Source audio: {src_vol} dB. Tracks: {tracks}"
+                    f"Source audio: {src_vol} dB. Tracks: {describe_tracks(meta)}"
                 )
 
         thumb = saved_thumb
@@ -306,14 +345,13 @@ async def process_file(
         )
         await progress.status(f"{item['quality']} Uploaded")
 
-        audio_info = (
-            f"{', '.join(meta['audio']) or 'none'} -> "
-            f"{', '.join(out_meta['audio']) or 'none'}"
-        )
         await client.send_message(
             chat_id,
             f"<b>Upload completed:</b> {label}\n"
-            f"<code>Audio: {audio_info} | volume {out_vol} dB</code>",
+            f"<code>Streams: {out_meta['videos']} video, "
+            f"{len(out_meta['audio'])} audio, {out_meta['subs']} sub | "
+            f"audio {', '.join(out_meta['audio']) or 'none'} | "
+            f"volume {out_vol} dB</code>",
         )
         return link, next_task
 
@@ -336,7 +374,12 @@ async def run_queue(client, chat_id, user_id, items, cfg, stats, task_id):
     for item in items:
         anime_groups[(item["title"], item["season"])].append(item)
 
+    # next file in the exact processing order (used to prefetch downloads)
+    order = build_order(items)
+    following = {id(a): b for a, b in zip(order, order[1:])}
+
     uploaded = failed = 0
+    pre = None
 
     for (title, season), group in anime_groups.items():
         if STATE["cancel"]:
@@ -360,17 +403,13 @@ async def run_queue(client, chat_id, user_id, items, cfg, stats, task_id):
             }
             posts, sinks = await open_posts(client, cfg, info, poster)
             links = {}
-            pre = None
 
-            for idx, item in enumerate(files):
+            for item in files:
                 if STATE["cancel"]:
-                    if pre:
-                        pre.cancel()
                     break
-                nxt = files[idx + 1] if idx + 1 < len(files) else None
                 link, pre = await process_file(
                     client, chat_id, item, cfg, posts, sinks, thumb,
-                    stats, task_id, pre, nxt,
+                    stats, task_id, pre, following.get(id(item)),
                 )
                 stats["done"] += 1
                 if link:
@@ -419,6 +458,9 @@ async def run_queue(client, chat_id, user_id, items, cfg, stats, task_id):
 
         remove(poster)
         remove(thumb)
+
+    if pre is not None:
+        pre.cancel()
 
     note = "Cancelled" if STATE["cancel"] else "Process completed"
     await client.send_message(

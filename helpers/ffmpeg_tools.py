@@ -60,6 +60,7 @@ async def probe(path: str) -> dict:
     info = {
         "duration": 0, "width": 0, "height": 0,
         "audio": [], "audio_streams": [],
+        "videos": 0, "subs": 0,
     }
     if code != 0:
         return info
@@ -67,9 +68,11 @@ async def probe(path: str) -> dict:
     info["duration"] = int(float(data.get("format", {}).get("duration", 0)))
     for stream in data.get("streams", []):
         kind = stream.get("codec_type")
-        if kind == "video" and not info["width"]:
-            info["width"] = stream.get("width", 0)
-            info["height"] = stream.get("height", 0)
+        if kind == "video":
+            info["videos"] += 1
+            if not info["width"]:
+                info["width"] = stream.get("width", 0)
+                info["height"] = stream.get("height", 0)
         elif kind == "audio":
             tags = {k.lower(): v for k, v in stream.get("tags", {}).items()}
             info["audio"].append(stream.get("codec_name", "unknown"))
@@ -79,6 +82,8 @@ async def probe(path: str) -> dict:
                     "title": tags.get("title", "").lower(),
                 }
             )
+        elif kind == "subtitle":
+            info["subs"] += 1
     return info
 
 

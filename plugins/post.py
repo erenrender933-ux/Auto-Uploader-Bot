@@ -66,7 +66,7 @@ def build_primary_caption(
             text = text[: room - 1].rsplit(" ", 1)[0] + "…"
         return (
             head
-            + f"\n\n<blockquote expandable>➥ {html.escape(text, quote=False)}</blockquote>"
+            + f"\n<blockquote expandable>➥ {html.escape(text, quote=False)}</blockquote>"
         )
     return head
 
@@ -150,7 +150,7 @@ async def send_primary_post(
         return ""
 
     caption = build_primary_caption(title, season, episode, language, qualities, synopsis)
-    label = "• CLICK HERE TO WATCH •"
+    label = "• ᴄʟɪᴄᴋ ʜᴇʀᴇ ᴛᴏ ᴡᴀᴛᴄʜ •"
     plain = InlineKeyboardMarkup([[InlineKeyboardButton(label, url=watch_link)]])
 
     msg, error = None, ""

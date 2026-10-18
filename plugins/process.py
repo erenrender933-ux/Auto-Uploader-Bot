@@ -495,3 +495,60 @@ async def run_queue(client, chat_id, user_id, items, cfg, stats, task_id):
     await client.send_message(
         chat_id, f"<b>{note}</b>\n\nUploaded: {uploaded}\nFailed: {failed}"
     )
+
+
+@Client.on_message(filters.command("start_process") & filters.private & OWNER)
+async def start_process(client: Client, message: Message):
+    user_id = message.from_user.id
+    items = QUEUE.get(user_id, [])
+
+    if not items:
+        return await message.reply_text("Queue is empty. Send files first.")
+    if STATE["running"]:
+        return await message.reply_text("A process is already running.")
+
+    try:
+        cfg = await db.get()
+        if not (
+            cfg["target_channel"] and cfg["main_channels"] and cfg["filestore_bot"]
+        ):
+            return await message.reply_text(
+                "Target channel, main channels and file store bot must be set first."
+            )
+
+        keep = cfg.get("keep_language")
+        if keep:
+            for item in items:
+                item["language"] = keep
+        unify_titles(items)
+
+        task_id = await db.next_task_id()
+    except Exception as e:
+        return await message.reply_text(
+            f"Could not start:\n<code>{html.escape(str(e))}</code>"
+        )
+
+    stats = {"done": 0, "total": len(items)}
+    STATE.update(running=True, cancel=False)
+    QUEUE[user_id] = []
+    await message.reply_text(
+        f"Upload process started for {len(items)} file(s). Task ID: {task_id}"
+    )
+
+    try:
+        await run_queue(client, message.chat.id, user_id, items, cfg, stats, task_id)
+    except Exception as e:
+        await client.send_message(
+            message.chat.id,
+            f"<b>Process stopped by an error:</b>\n<code>{html.escape(str(e))}</code>",
+        )
+    finally:
+        STATE["running"] = False
+
+
+@Client.on_message(filters.command("cancel") & filters.private & OWNER)
+async def cancel_process(client: Client, message: Message):
+    if not STATE["running"]:
+        return await message.reply_text("Nothing is running.")
+    STATE["cancel"] = True
+    await message.reply_text("Cancelling after the current file...")

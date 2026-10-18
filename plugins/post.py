@@ -13,6 +13,7 @@ from helpers.buttons import raw_quality_markup
 
 QUALITY_ORDER = ["480p", "720p", "1080p", "2160p", "HDRIP"]
 AUDIO_LANGUAGES = {"Tamil", "Telugu", "Hindi", "Malayalam", "Kannada"}
+LINE = "━━━━━━━━━━━━━━━━━━"
 
 
 def language_label(language: str) -> str:
@@ -25,36 +26,49 @@ def language_label(language: str) -> str:
 
 def build_caption(title: str, season: int, episode: int, language: str) -> str:
     return (
-        f"<b><blockquote>{html.escape(title)}</b></blockquote>\n"
-        "<b>━━━━━━━━━━━━━━━━━━\n"
-        f"☆ Season: {season:02d}\n"
-        f"☆ Episode: {episode:02d}\n"
-        f"☆ Quality: Multi Quality [{language_label(language)}]\n"
-        "━━━━━━━━━━━━━━━━━━</b>\n\n"
-        f"<b><blockquote>ɴᴇᴡ ᴇᴘɪsᴏᴅᴇ {episode:02d} ᴀᴅᴅᴇᴅ 👇</b></blockquote>"
+        f"<blockquote>{html.escape(title, quote=False)}</blockquote>\n"
+        f"{LINE}\n"
+        f"➥ Season: {season:02d}\n"
+        f"➤ Episode: {episode:02d}\n"
+        f"➥ Quality: Multi Quality [{language_label(language)}]\n"
+        f"{LINE}\n\n"
+        f"<blockquote>NEW EPISODE {episode:02d} ADDED 👇</blockquote>"
     )
 
 
 def build_primary_caption(
-    title: str, season: int, episode: int, language: str, qualities: list
+    title: str, season: int, episode: int, language: str,
+    qualities: list, synopsis: str = "",
 ) -> str:
     ordered = sorted(
         qualities, key=lambda q: QUALITY_ORDER.index(q) if q in QUALITY_ORDER else 9
     )
-    quality_text = ",".join(q.upper() for q in ordered)
-    return (
-        f"<blockquote>╰┈➤ {html.escape(title.upper(), quote=False)}</blockquote>\n"
-        "<b>━━━━━━━━━━━━━━━━━━\n"
-        f"✧ sᴇᴀsᴏɴ  ✦ {season:02d}\n"
-        f"✧ ᴀᴜᴅɪᴏ   ✦ {language.upper()}\n"
-        f"✧ ǫᴜᴀʟɪᴛʏ ✦ {quality_text}.\n"
-        f"✧ ᴇᴘɪsᴏᴅᴇ ✦ {episode:02d}\n"
-        "━━━━━━━━━━━━━━━━━━</b>\n\n"
-        "<blockquote>➤ ᴜsᴇ ᴠʟᴄ ᴘʟᴀʏᴇʀ ᴏʀ ᴍx ᴘʟᴀʏᴇʀ ᴛᴏ ᴡᴀᴛᴄʜ ᴛʜᴇ ᴇᴘɪsᴏᴅᴇs "
-        "ᴡɪᴛʜ ɢᴏᴏᴅ ᴇxᴘᴇʀɪᴇɴᴄᴇ !.</blockquote>\n"
-        "<blockquote>≡ ɴᴏᴛᴇ :- ɴᴇxᴛ ɴᴇᴡ ᴇᴘɪsᴏᴅᴇ ɴᴇxᴛ ᴡᴇᴇᴋ sᴏ sᴛᴀʏ ᴛᴜɴᴇᴅ "
-        "ɢᴜʏs.!</blockquote>"
+    info = []
+    if season != 1:
+        info.append(f"❃ Season: {season:02d}")
+    info += [
+        f"❃ Audio: {language}",
+        f"❃ Quality: {', '.join(ordered)}",
+        f"❃ Episode: {episode:02d}",
+    ]
+
+    head = (
+        f"<blockquote>{html.escape(title, quote=False)}</blockquote>\n"
+        f"{LINE}\n" + "\n".join(info) + f"\n{LINE}"
     )
+
+    # photo captions are limited to 1024 visible characters
+    visible = len(title) + len(LINE) * 2 + sum(len(x) for x in info) + len(info) + 8
+    room = 1024 - visible - 30
+    text = " ".join(synopsis.split())
+    if text and room > 150:
+        if len(text) > room:
+            text = text[: room - 1].rsplit(" ", 1)[0] + "…"
+        return (
+            head
+            + f"\n\n<blockquote expandable>➥ {html.escape(text, quote=False)}</blockquote>"
+        )
+    return head
 
 
 def strip_style(markup: dict) -> dict:
@@ -126,32 +140,39 @@ async def send_primary_post(
     episode: int,
     language: str,
     qualities: list,
-    poster: str | None,
+    photo: str | None,
     watch_link: str,
+    synopsis: str = "",
 ) -> str:
     """Post in the primary channel. Returns an error text, or '' on success."""
     chat_id = cfg.get("primary_channel")
     if not chat_id:
         return ""
 
-    caption = build_primary_caption(title, season, episode, language, qualities)
-    label = "• ᴄʟɪᴄᴋ ʜᴇʀᴇ ᴛᴏ ᴡᴀᴛᴄʜ •"
+    caption = build_primary_caption(title, season, episode, language, qualities, synopsis)
+    label = "• CLICK HERE TO WATCH •"
     plain = InlineKeyboardMarkup([[InlineKeyboardButton(label, url=watch_link)]])
 
-    try:
-        if poster and os.path.exists(poster):
-            msg = await client.send_photo(
-                chat_id, poster, caption=caption, reply_markup=plain
-            )
-        else:
-            msg = await client.send_message(chat_id, caption, reply_markup=plain)
-    except Exception as e:
-        return str(e)
+    msg, error = None, ""
+    # second try without the expandable quote, in case it is not supported
+    for text in (caption, caption.replace("<blockquote expandable>", "<blockquote>")):
+        try:
+            if photo and os.path.exists(photo):
+                msg = await client.send_photo(
+                    chat_id, photo, caption=text, reply_markup=plain
+                )
+            else:
+                msg = await client.send_message(chat_id, text, reply_markup=plain)
+            break
+        except Exception as e:
+            error = str(e)
+    if msg is None:
+        return error
 
-    # Pyrogram cannot colour buttons, so change the markup to blue via Bot API.
+    # Pyrogram cannot colour buttons, so make it red through the Bot API.
     # If this fails, the plain button stays and the post is still fine.
-    blue = {
-        "inline_keyboard": [[{"text": label, "url": watch_link, "style": "primary"}]]
+    red = {
+        "inline_keyboard": [[{"text": label, "url": watch_link, "style": "danger"}]]
     }
     try:
         await _call(
@@ -159,9 +180,21 @@ async def send_primary_post(
             {
                 "chat_id": chat_id,
                 "message_id": msg.id,
-                "reply_markup": json.dumps(blue),
+                "reply_markup": json.dumps(red),
             },
         )
     except Exception:
         pass
     return ""
+
+
+async def send_stickers(client: Client, cfg: dict, chat_ids: list):
+    """Send the saved sticker (see /setsticker) to each chat."""
+    file_id = cfg.get("sticker_file_id")
+    if not file_id:
+        return
+    for chat_id in chat_ids:
+        try:
+            await client.send_sticker(chat_id, file_id)
+        except Exception:
+            pass

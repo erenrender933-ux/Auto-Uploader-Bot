@@ -26,13 +26,13 @@ def language_label(language: str) -> str:
 
 def build_caption(title: str, season: int, episode: int, language: str) -> str:
     return (
-        f"<blockquote>{html.escape(title, quote=False)}</blockquote>\n"
+        f"<b><blockquote>{html.escape(title, quote=False)}</blockquote>\n"
         f"{LINE}\n"
         f"➥ Season: {season:02d}\n"
         f"➤ Episode: {episode:02d}\n"
         f"➥ Quality: Multi Quality [{language_label(language)}]\n"
         f"{LINE}\n\n"
-        f"<blockquote>NEW EPISODE {episode:02d} ADDED 👇</blockquote>"
+        f"<blockquote>ɴᴇᴡ ᴇᴘɪsᴏᴅᴇ {episode:02d} ᴀᴅᴅᴇᴅ 👇</b></blockquote>"
     )
 
 
@@ -45,7 +45,7 @@ def build_primary_caption(
     )
     info = []
     if season != 1:
-        info.append(f"❃ Season: {season:02d}")
+        info.append(f"<b>❃ Season: {season:02d}")
     info += [
         f"❃ Audio: {language}",
         f"❃ Quality: {', '.join(ordered)}",
@@ -54,7 +54,7 @@ def build_primary_caption(
 
     head = (
         f"<blockquote>{html.escape(title, quote=False)}</blockquote>\n"
-        f"{LINE}\n" + "\n".join(info) + f"\n{LINE}"
+        f"{LINE}\n" + "\n".join(info) + f"\n{LINE}</b>"
     )
 
     # photo captions are limited to 1024 visible characters

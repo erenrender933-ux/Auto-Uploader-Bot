@@ -1,3 +1,4 @@
+import html
 import os
 import re
 from typing import Optional
@@ -16,14 +17,33 @@ query ($search: String) {
     averageScore
     genres
     status
+    format
     episodes
     season
     seasonYear
     studios(isMain: true) { nodes { name } }
     coverImage { extraLarge large }
+    bannerImage
   }
 }
 """
+
+
+def _clean(text: str) -> str:
+    text = re.sub(r"<br\s*/?>", " ", text, flags=re.I)
+    text = re.sub(r"<[^>]+>", "", text)
+    text = re.sub(r"\(Source:[^)]*\)", "", text, flags=re.I)
+    text = re.sub(r"Note:.*", "", text, flags=re.I | re.S)
+    text = html.unescape(text)
+    return re.sub(r"\s+", " ", text).strip()
+
+
+def _format_label(value: Optional[str]) -> str:
+    if not value:
+        return ""
+    if value == "TV":
+        return "TV"
+    return value.replace("_", " ").title()
 
 
 async def fetch_anime(title: str) -> Optional[dict]:
@@ -40,18 +60,24 @@ async def fetch_anime(title: str) -> Optional[dict]:
     if not media:
         return None
 
-    description = re.sub(r"<.*?>", "", media.get("description") or "")
     studios = media["studios"]["nodes"]
+    season = (media.get("season") or "").title()
+    year = media.get("seasonYear") or ""
+    score = media.get("averageScore") or 0
 
     return {
         "title": media["title"]["english"] or media["title"]["romaji"],
-        "synopsis": description.strip()[:450],
-        "rating": (media.get("averageScore") or 0) / 10,
-        "genres": media.get("genres", [])[:4],
+        "synopsis": _clean(media.get("description") or ""),
+        "score": score,
+        "rating": score / 10,
+        "genres": media.get("genres", [])[:3],
         "status": media.get("status", "UNKNOWN"),
+        "format": _format_label(media.get("format")),
         "episodes": media.get("episodes"),
-        "studio": studios[0]["name"] if studios else "Unknown",
+        "season_label": f"{season} {year}".strip(),
+        "studio": studios[0]["name"] if studios else "",
         "poster_url": media["coverImage"]["extraLarge"],
+        "banner_url": media.get("bannerImage"),
     }
 
 

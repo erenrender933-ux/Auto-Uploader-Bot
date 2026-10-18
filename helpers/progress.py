@@ -58,28 +58,28 @@ class Progress:
 
     def _text(self, status: str, percent=None, size_line="", speed=0.0, left=0.0):
         parts = [
-            f"<blockquote>▶ <b>Anime Name :</b> <i>{html.escape(self.name)}</i></blockquote>"
+            f"<blockquote>◈ <b>Anime Name :</b> <i>{html.escape(self.name)}</i></blockquote>"
         ]
         if percent is None:
             parts.append(
-                f"<blockquote>▶ <b>Status :</b> <i>{html.escape(status)}</i></blockquote>"
+                f"<blockquote>◈ <b>Status :</b> <i>{html.escape(status)}</i></blockquote>"
             )
         else:
             took = time.time() - self.start
             parts.append(
-                f"<blockquote>▶ <b>Status :</b> <i>{html.escape(status)}</i>\n"
+                f"<blockquote>◈ <b>Status :</b> <i>{html.escape(status)}</i>\n"
                 f"   [{make_bar(percent)}] {percent:.2f}%</blockquote>"
             )
             parts.append(
-                f"<blockquote>   ▶ <b>Size :</b> {size_line}\n"
-                f"   ▶ <b>Speed :</b> {humanbytes(speed)}/s\n"
-                f"   ▶ <b>Time Took :</b> {human_time(took)}\n"
-                f"   ▶ <b>Time Left :</b> {human_time(left)}</blockquote>"
+                f"<blockquote>   ◈ <b>Size :</b> {size_line}\n"
+                f"   ◈ <b>Speed :</b> {humanbytes(speed)}/s\n"
+                f"   ◈ <b>Time Took :</b> {human_time(took)}\n"
+                f"   ◈ <b>Time Left :</b> {human_time(left)}</blockquote>"
             )
         parts.append(
-            f"<blockquote>▶ <b>File(s) Encoded:</b> "
+            f"<blockquote>◈ <b>File(s) Encoded:</b> "
             f"{self.stats['done']} / {self.stats['total']}\n"
-            f"▶ <b>Task ID :</b> {self.task_id}</blockquote>"
+            f"◈ <b>Task ID :</b> {self.task_id}</blockquote>"
         )
         return "\n".join(parts)
 

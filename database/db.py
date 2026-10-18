@@ -6,6 +6,8 @@ DEFAULTS = {
     "_id": "global",
     "audio_track": 0,
     "keep_language": "",
+    "primary_enabled": True,
+    "sticker_file_id": None,
     "watch_link": Config.WATCH_LINK,
     "rename_format": "[AnimeHubTamil] {title} S{season}E{episode} [{quality}] [{language}]",
     "watermark_text": "Anime Hub Tamil",

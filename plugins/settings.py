@@ -234,3 +234,17 @@ async def set_track(client: Client, message: Message):
         "Other audio, subtitles and extra streams are removed."
     )
     
+
+@Client.on_message(filters.command("primaryoff") & filters.private & OWNER)
+async def primary_off(client: Client, message: Message):
+    await db.set("primary_enabled", False)
+    await message.reply_text(
+        "Primary channel posts are OFF. Main channel uploads continue as usual."
+    )
+
+
+@Client.on_message(filters.command("primaryon") & filters.private & OWNER)
+async def primary_on(client: Client, message: Message):
+    await db.set("primary_enabled", True)
+    await message.reply_text("Primary channel posts are ON.")
+    

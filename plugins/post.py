@@ -54,7 +54,7 @@ def build_primary_caption(
 
     head = (
         f"<blockquote>{html.escape(title, quote=False)}</blockquote>\n"
-        f"{LINE}\n".join(info) + f"\n{LINE}</b>"
+        f"{LINE}\n" + "\n".join(info) + f"\n{LINE}"
     )
 
     # photo captions are limited to 1024 visible characters

@@ -54,7 +54,7 @@ def build_primary_caption(
 
     head = (
         f"<blockquote>{html.escape(title, quote=False)}</blockquote>\n"
-        f"{LINE}\n" + "\n".join(info) + f"\n{LINE}</b>"
+        f"{LINE}\n".join(info) + f"\n{LINE}</b>"
     )
 
     # photo captions are limited to 1024 visible characters
@@ -66,7 +66,7 @@ def build_primary_caption(
             text = text[: room - 1].rsplit(" ", 1)[0] + "…"
         return (
             head
-            + f"\n<blockquote expandable>➥ {html.escape(text, quote=False)}</blockquote>"
+            + f"\n<blockquote expandable><b>≡ {html.escape(text, quote=False)}</b></blockquote>"
         )
     return head
 

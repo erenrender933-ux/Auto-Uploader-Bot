@@ -390,6 +390,9 @@ async def run_queue(client, chat_id, user_id, items, cfg, stats, task_id):
         poster = await get_poster(client, chat_id, user_id, title, season)
         thumb = await get_thumb(client, chat_id, user_id, title, cfg)
 
+        # primary post card and synopsis come from AniList (made once per anime)
+        card, synopsis, card_tried = None, "", False
+
         episodes = defaultdict(list)
         for item in group:
             episodes[(item["episode"], item["language"])].append(item)
@@ -424,34 +427,57 @@ async def run_queue(client, chat_id, user_id, items, cfg, stats, task_id):
             for sink in sinks:
                 await sink.delete()
 
-            if links:
-                if STATE["cancel"]:
-                    pass
-                elif not cfg.get("primary_channel"):
-                    await client.send_message(
-                        chat_id,
-                        "Primary channel is not set. Use /setprimary -100xxxx",
-                    )
-                else:
-                    watch_link = cfg.get("watch_link") or cfg["join_link"]
-                    try:
-                        error = await send_primary_post(
-                            client, cfg, title, season, episode, language,
-                            list(links.keys()), poster, watch_link,
-                        )
-                    except Exception as e:
-                        error = str(e)
-                    if error:
+            if links and not STATE["cancel"]:
+                live = await db.get()  # fresh settings, so /primaryoff works now
+
+                # sticker under the main channel post
+                await send_stickers(client, live, [p.chat_id for p in posts])
+
+                if live.get("primary_enabled", True):
+                    if not live.get("primary_channel"):
                         await client.send_message(
                             chat_id,
-                            "Primary channel post failed:\n"
-                            f"<code>{html.escape(str(error))}</code>",
+                            "Primary channel is not set. "
+                            "Use /setprimary -100xxxx or /primaryoff",
                         )
                     else:
-                        await client.send_message(
-                            chat_id, "Primary channel post sent."
-                        )
-            else:
+                        if not card_tried:
+                            card_tried = True
+                            data = await fetch_anime(title)
+                            if data:
+                                synopsis = data.get("synopsis", "")
+                                card = await make_card(
+                                    data,
+                                    os.path.join(
+                                        WORK_DIR,
+                                        f"card_{task_id}_{safe_name(title)}.jpg",
+                                    ),
+                                )
+
+                        watch_link = live.get("watch_link") or live["join_link"]
+                        try:
+                            error = await send_primary_post(
+                                client, live, title, season, episode, language,
+                                list(links.keys()), card or poster, watch_link,
+                                synopsis,
+                            )
+                        except Exception as e:
+                            error = str(e)
+
+                        if error:
+                            await client.send_message(
+                                chat_id,
+                                "Primary channel post failed:\n"
+                                f"<code>{html.escape(str(error))}</code>",
+                            )
+                        else:
+                            await send_stickers(
+                                client, live, [live["primary_channel"]]
+                            )
+                            await client.send_message(
+                                chat_id, "Primary channel post sent."
+                            )
+            elif not links:
                 for post in posts:
                     try:
                         await client.delete_messages(post.chat_id, post.message_id)
@@ -460,6 +486,7 @@ async def run_queue(client, chat_id, user_id, items, cfg, stats, task_id):
 
         remove(poster)
         remove(thumb)
+        remove(card)
 
     if pre is not None:
         pre.cancel()
@@ -468,49 +495,3 @@ async def run_queue(client, chat_id, user_id, items, cfg, stats, task_id):
     await client.send_message(
         chat_id, f"<b>{note}</b>\n\nUploaded: {uploaded}\nFailed: {failed}"
     )
-
-
-@Client.on_message(filters.command("start_process") & filters.private & OWNER)
-async def start_process(client: Client, message: Message):
-    user_id = message.from_user.id
-    items = QUEUE.get(user_id, [])
-
-    if not items:
-        return await message.reply_text("Queue is empty. Send files first.")
-    if STATE["running"]:
-        return await message.reply_text("A process is already running.")
-
-    cfg = await db.get()
-    if not (cfg["target_channel"] and cfg["main_channels"] and cfg["filestore_bot"]):
-        return await message.reply_text(
-            "Target channel, main channels and file store bot must be set first."
-        )
-
-    # one language for the whole batch, and one title per anime
-    keep = cfg.get("keep_language")
-    if keep:
-        for item in items:
-            item["language"] = keep
-    unify_titles(items)
-
-    task_id = await db.next_task_id()
-    stats = {"done": 0, "total": len(items)}
-
-    STATE.update(running=True, cancel=False)
-    QUEUE[user_id] = []
-    await message.reply_text(
-        f"Upload process started for {len(items)} file(s). Task ID: {task_id}"
-    )
-
-    try:
-        await run_queue(client, message.chat.id, user_id, items, cfg, stats, task_id)
-    finally:
-        STATE["running"] = False
-
-
-@Client.on_message(filters.command("cancel") & filters.private & OWNER)
-async def cancel_process(client: Client, message: Message):
-    if not STATE["running"]:
-        return await message.reply_text("Nothing is running.")
-    STATE["cancel"] = True
-    await message.reply_text("Cancelling after the current file...")

@@ -26,10 +26,10 @@ def human_time(seconds: float) -> str:
     return f"{s}s"
 
 
-def make_bar(percent: float, length: int = 12) -> str:
+def make_bar(percent: float, length: int = 10) -> str:
     percent = max(0.0, min(percent, 100.0))
     filled = int(length * percent / 100)
-    return "■" * filled + "□" * (length - filled)
+    return "▰" * filled + "▱" * (length - filled)
 
 
 class Progress:
@@ -57,31 +57,44 @@ class Progress:
         self.last_edit = 0.0
 
     def _text(self, status: str, percent=None, size_line="", speed=0.0, left=0.0):
-        parts = [
-            f"<blockquote>◈ <b>Anime Name :</b> <i>{html.escape(self.name)}</i></blockquote>"
-        ]
-        if percent is None:
-            parts.append(
-                f"<blockquote>◈ <b>Status :</b> <i>{html.escape(status)}</i></blockquote>"
-            )
-        else:
-            took = time.time() - self.start
-            parts.append(
-                f"<blockquote>◈ <b>Status :</b> <i>{html.escape(status)}</i>\n"
-                f"   [{make_bar(percent)}] {percent:.2f}%</blockquote>"
-            )
-            parts.append(
-                f"<blockquote>   ◈ <b>Size :</b> {size_line}\n"
-                f"   ◈ <b>Speed :</b> {humanbytes(speed)}/s\n"
-                f"   ◈ <b>Time Took :</b> {human_time(took)}\n"
-                f"   ◈ <b>Time Left :</b> {human_time(left)}</blockquote>"
-            )
-        parts.append(
-            f"<blockquote>◈ <b>File(s) Encoded:</b> "
+        name = html.escape(self.name)
+        status = html.escape(status)
+
+        files = (
+            "<blockquote><b>"
+            "❖ 𝗙𝗶𝗹𝗲(𝘀) 𝗘𝗻𝗰𝗼𝗱𝗲𝗱 : "
             f"{self.stats['done']} / {self.stats['total']}\n"
-            f"◈ <b>Task ID :</b> {self.task_id}</blockquote>"
+            f"❖ 𝗧𝗮𝘀𝗸 𝗜𝗗 : {self.task_id}"
+            "</b></blockquote>"
         )
-        return "\n".join(parts)
+
+        # status-only message (no bar), e.g. "720p Uploaded"
+        if percent is None:
+            head = (
+                "<blockquote><b>"
+                f"❖ 𝗔𝗻𝗶𝗺𝗲 𝗡𝗮𝗺𝗲 : {name}\n"
+                f"❖ 𝗦𝘁𝗮𝘁𝘂𝘀 : {status}"
+                "</b></blockquote>"
+            )
+            return f"{head}\n\n{files}"
+
+        took = time.time() - self.start
+        head = (
+            "<blockquote><b>"
+            f"❖ 𝗔𝗻𝗶𝗺𝗲 𝗡𝗮𝗺𝗲 : {name}\n"
+            f"❖ 𝗦𝘁𝗮𝘁𝘂𝘀 : {status}\n"
+            f"➥ {make_bar(percent)} {percent:.1f}%"
+            "</b></blockquote>"
+        )
+        details = (
+            "<blockquote><b>"
+            f"❖ 𝗦𝗶𝘇𝗲 : {size_line}\n"
+            f"❖ 𝗦𝗽𝗲𝗲𝗱 : {humanbytes(speed)}/s\n"
+            f"❖ 𝗧𝗶𝗺𝗲 𝗧𝗼𝗼𝗸 : {human_time(took)}\n"
+            f"❖ 𝗧𝗶𝗺𝗲 𝗟𝗲𝗳𝘁 : {human_time(left)}"
+            "</b></blockquote>"
+        )
+        return f"{head}\n\n{details}\n\n{files}"
 
     async def _push(self, text: str, force: bool = False):
         # skip if the previous edit is still running (keeps transfers fast)
@@ -115,7 +128,7 @@ class Progress:
         await self._push(
             self._text(
                 self.stage, percent,
-                f"{humanbytes(current)} out of ~ {humanbytes(total)}",
+                f"{humanbytes(current)} / {humanbytes(total)}",
                 speed, left,
             )
         )
@@ -137,7 +150,7 @@ class Progress:
         await self._push(
             self._text(
                 self.stage, percent,
-                f"{humanbytes(out_size)} out of ~ {humanbytes(estimate)}",
+                f"{humanbytes(out_size)} / {humanbytes(estimate)}",
                 speed, left,
             )
         )
